@@ -6,14 +6,19 @@ import tensorflow as tf
 
 from collections import deque
 
-from PIL import image
+from PIL import Image
 
 REPLAY_MEMORY_CAPACITY = 10 ** 6
 NUM_OF_FRAMES_TO_STACK = 4
 MINIBATCH_SIZE = 32
-GAMMA = 0.95    # TODO: check original code
+GAMMA = 0.95 # TODO: check original code
 NUM_OF_STEPS_TO_MIN_EPSILON = 10 ** 6
 MIN_EPSILON = 0.1
+
+RMS_PROP_LEARNING_RATE = 0.0002 # TODO: check original code
+RMS_PROP_DECAY = 0.99 # TODO: check original code
+RMS_PROP_EPSILON = 1e-6 # TODO: check original code
+
 
 class AtariDQNAgent:
     def __init__(self, game_name='Breakout-v0'):
@@ -30,12 +35,12 @@ class AtariDQNAgent:
 #        )
         self._replay_memory = deque(maxlen=REPLAY_MEMORY_CAPACITY)
 
-        self._Q_graph_confiuration = [
-            ('input', {'size': 84, 'num_chs': 4),
+        self._Q_graph_configuration = [
+            ('input', {'size': 84, 'num_chs': 4}),
             ('conv1', {'W_size': 8, 'stride': 4, 'in': 4, 'out': 16}),
             ('conv2', {'W_size': 4, 'stride': 2, 'in': 16, 'out': 32}),
             ('fc1', {'num_relus': 256}),
-            ('output', {'num_actions': self.get_num_of_actions}),
+            ('output', {'num_actions': self.get_num_of_actions()}),
         ]
         
         self._Q_graph = tf.Graph()
@@ -50,7 +55,7 @@ class AtariDQNAgent:
     def preprocess_observation(
         self,
         observation,
-        last_state=None,
+        state=None,
         new_width=84,
         new_height=110,
         threshold=1,
@@ -74,7 +79,7 @@ class AtariDQNAgent:
         else:
             return np.append(
                 obs.reshape(new_width, new_width, 1),
-                last_state[:, :, 1:],
+                state[:, :, 1:],
                 axis=2,
             )
 
@@ -99,11 +104,7 @@ class AtariDQNAgent:
                 self._replay_memory.append(
                     (prev_state, action, reward, new_state)
                 )
-                self._optimize_Q(
-                    batch_size=MINBATCH_SIZE,
-                    gamma=GAMMA,
-                    tf_session,
-                )
+                self._optimize_Q(MINIBATCH_SIZE, GAMMA, tf_session)
                 prev_state = new_state
 
 
@@ -111,6 +112,7 @@ class AtariDQNAgent:
         pass
     
     def _build_Q_graph(self):
+        self._Q_graph_layers = []
         prev_layer = None
         for layer_name, layer_conf in self._Q_graph_configuration:
             with tf.variable_scope(layer_name):
@@ -119,7 +121,7 @@ class AtariDQNAgent:
                     c = layer_conf['num_chs']
                     new_layer = tf.placeholder(
                         tf.float32,
-                        shape=(-1, s, s, c),
+                        shape=(None, s, s, c),
                         name='input_layer',
                     )
                 elif 'conv' in layer_name:
@@ -142,8 +144,9 @@ class AtariDQNAgent:
                     new_layer = tf.nn.relu(a_tensor)
                 elif 'fc' in layer_name:
                     n = layer_conf['num_relus']
-                    conv_out_flattened = tf.reshape(prev_layer, (1, -1))
-                    in_dim = a_tensor.shape.as_list()[-1]
+                    _, h, w, c = prev_layer.shape.as_list()
+                    in_dim = h * w * c
+                    conv_out_flattened = tf.reshape(prev_layer, (-1, in_dim))
                     W, b = self._get_filter_and_bias(
                         W_shape=(in_dim, n),
                         b_shape=n,
@@ -171,12 +174,12 @@ class AtariDQNAgent:
         with tf.variable_scope('train_op'):
             action = tf.placeholder(
                 tf.float32,
-                shape=(-1, self.get_num_of_actions()),
+                shape=(MINIBATCH_SIZE, self.get_num_of_actions()),
                 name='action',
             )
             y = tf.placeholder(
                 tf.float32,
-                shape=(-1),
+                shape=(MINIBATCH_SIZE),
                 name='y'
             )
             Q = self._Q_graph_layers[-1]
@@ -192,8 +195,8 @@ class AtariDQNAgent:
             self._loss = tf.reduce_mean(tf.square(y - Q_of_action))
             self._train_op = tf.train.RMSPropOptimizer(
                 learning_rate=RMS_PROP_LEARNING_RATE,
-                decay=RMS_PROP_DECAY,
-                epsilon=RMS_PROP_EPSILON,
+#                decay=RMS_PROP_DECAY,
+#                epsilon=RMS_PROP_EPSILON,
             ).minimize(self._loss)
 
     def _get_action(self, state, step, tf_session):
@@ -230,9 +233,23 @@ class AtariDQNAgent:
             seed=self._random_seed,
         )
 
-    def _get_minibatch_from_replay_memory(self, batch_size):
+    def _get_minibatch_from_replay_memory(self, minibatch_size):
         # TODO: Build minibatch from GPU-side
-        return random.sample(self._replay_memory, batch_size)
+        experiences = random.sample(self._replay_memory, minibatch_size)
+        minibatch = {
+            'states': [],
+            'actions' : [],
+            'rewards': [],
+            'next_states': [],
+        }
+        for state, action, reward, next_state in experiences:
+            minibatch['states'].append(state)
+            minibatch['actions'].append(action)
+            minibatch['rewards'].append(reward)
+            minibatch['next_states'].append(next_state)
+
+        return minibatch
+
 
     def _get_Q_values(self, state, tf_session):
         return tf_session.run(
@@ -247,9 +264,8 @@ class AtariDQNAgent:
         ys = []
         next_Qs = self._get_Q_values(next_states, tf_session)
 
-        for i in range(batch_size):
-            state = states[i]
-            reward = rewards[i]
+        for i in range(minibatch_size):
+            reward = minibatch['rewards'][i]
             next_state = next_states[i]
             if next_state is None:
                 ys.append(reward)
