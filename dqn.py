@@ -9,19 +9,25 @@ from collections import deque
 from PIL import image
 
 REPLAY_MEMORY_CAPACITY = 10 ** 6
+NUM_OF_FRAMES_TO_STACK = 4
+MINIBATCH_SIZE = 32
+GAMMA = 0.95    # TODO: check original code
+NUM_OF_STEPS_TO_MIN_EPSILON = 10 ** 6
+MIN_EPSILON = 0.1
 
 class AtariDQNAgent:
     def __init__(self, game_name='Breakout-v0'):
         # TODO: Check random seed usages.
         self._random_seed = None
         self._env = gym.make(game_name)
+        # XXX: Should we do skipping and stacking at the same time?
         # TODO: Remove the following hack
-        self._env.__init__(
-            game='breakout',
-            obs_type='image',
-            frameskip=1,
-            repeat_action_probability=0,
-        )
+#        self._env.__init__(
+#            game='breakout',
+#            obs_type='image',
+#            frameskip=1,
+#            repeat_action_probability=1,
+#        )
         self._replay_memory = deque(maxlen=REPLAY_MEMORY_CAPACITY)
 
         self._Q_graph_confiuration = [
@@ -39,11 +45,12 @@ class AtariDQNAgent:
             self._build_Q_graph()
 
     def get_num_of_actions(self):
-        return len(self._env.action_space)
+        return self._env.action_space.n
 
     def preprocess_observation(
         self,
         observation,
+        last_state=None,
         new_width=84,
         new_height=110,
         threshold=1,
@@ -59,26 +66,50 @@ class AtariDQNAgent:
         obs[obs < threshold] = 0
         obs[obs >= threshold] = 255
         obs = obs[-new_width:, :]
+
+        if state is None:
+            # Prepare and return the initial state.
+            # TODO: check the original code.
+            return np.stack([obs] * 4, axis=2)
+        else:
+            return np.append(
+                obs.reshape(new_width, new_width, 1),
+                last_state[:, :, 1:],
+                axis=2,
+            )
+
         return obs
 
-    def train(self, num_of_episodes, num_of_steps):
-        for i in range(num_of_episodes):
-            initial_observation = self.env.reset()
-            phi_0 = self.preprocess_observation(initial_observation)
+    def train(self, num_of_frames, tf_session):
+        step = 0
+        while step < num_of_frames:
+            initial_observation = self._env.reset()
+            prev_state = self.preprocess_observation(
+                initial_observation,
+            )
             done = False
             while not done:
-                action = self._get_action(phi_0)
+                action = self._get_action(prev_state, step, tf_session)
                 observation, reward, done, _ = self.env.step(action)
-                phi_1 = self.preprocess_observation(observation)
-                self._replay_memory.append(
-                    (phi_0, a_t, reward, phi_1)
+                step += 1
+                new_state = self.preprocess_observation(
+                    observation,
+                    last_state=prev_state,
                 )
-                phi_0 = phi_1
-                self._optimize_Q()
+                self._replay_memory.append(
+                    (prev_state, action, reward, new_state)
+                )
+                self._optimize_Q(
+                    batch_size=MINBATCH_SIZE,
+                    gamma=GAMMA,
+                    tf_session,
+                )
+                prev_state = new_state
 
 
     def play_game(self):
-
+        pass
+    
     def _build_Q_graph(self):
         prev_layer = None
         for layer_name, layer_conf in self._Q_graph_configuration:
@@ -165,10 +196,20 @@ class AtariDQNAgent:
                 epsilon=RMS_PROP_EPSILON,
             ).minimize(self._loss)
 
-    def _get_action(self):
-        self.env.action_space.sample()
+    def _get_action(self, state, step, tf_session):
+        n_steps = NUM_OF_STEPS_TO_MIN_EPSILON 
+        if step < n_steps:
+            epsilon = 1 - (1 - MIN_EPSILON) / n_steps * step 
+        else:
+            epsilon = MIN_EPSILON
+        if random.random() < epsilon:
+            return self.env.action_space.sample()
+        else:
+            return self._get_action_from_Q(state, tf_session)
 
-    def _get_action_from_Q(self):
+    def _get_action_from_Q(self, state, tf_session):
+        Qs = self._get_Q_values(self, state, tf_session)
+        return np.argmax(Qs)
 
     def _get_filter_and_bias(self, W_shape, b_shape):
         W = tf.get_variable(
@@ -193,14 +234,14 @@ class AtariDQNAgent:
         # TODO: Build minibatch from GPU-side
         return random.sample(self._replay_memory, batch_size)
 
-    def _get_Q_values(self, states, tf_session):
+    def _get_Q_values(self, state, tf_session):
         return tf_session.run(
             self._Q_graph_layers[-1],
-            feed_dict={self._Q_graph_layers[0]: states},
+            feed_dict={self._Q_graph_layers[0]: state},
         )
 
-    def _optimize_Q(self, batch_size, gamma, tf_session):
-        minibatch = self.get_minibatch_from_replay_memory(batch_size)
+    def _optimize_Q(self, minibatch_size, gamma, tf_session):
+        minibatch = self.get_minibatch_from_replay_memory(minibatch_size)
         next_states = minibatch['next_states']
 
         ys = []
