@@ -47,94 +47,10 @@ class AtariDQNAgent:
         self._Q_graph_layers = None
         self._train_op_input = {}
         self._loss = None
-        self._merged_summary = None
+        self.tf_summary = {}
         with self._Q_graph.as_default():
             self._build_Q_graph()
 
-    def get_num_of_actions(self):
-        return self._env.action_space.n
-
-    def preprocess_observation(
-        self,
-        observation,
-        state=None,
-        new_width=84,
-        new_height=110,
-        threshold=1,
-    ):
-        img = Image.fromarray(observation)
-        # TODO: remove resizing/grayscaling/thresholding.
-        img = img.convert('L')
-        new_size = (new_width, new_height) 
-        img = img.resize(new_size)
-        
-        obs = np.array(img)
-        
-        obs[obs < threshold] = 0
-        obs[obs >= threshold] = 255
-        obs = obs[-new_width:, :]
-
-        if state is None:
-            # Prepare and return the initial state.
-            # TODO: check the original code.
-            return np.stack([obs] * 4, axis=2)
-        else:
-            return np.append(
-                obs.reshape(new_width, new_width, 1),
-                state[:, :, 1:],
-                axis=2,
-            )
-
-        return obs
-
-    def train(self, max_num_of_steps):
-        # XXX: Default graph?
-        with self._Q_graph.as_default():
-            tf_session = tf.Session()
-
-            tf_session.run(tf.global_variables_initializer())
-            
-            #saver = tf.train.Saver()
-
-            summary_writer = tf.summary.FileWriter('log', self._Q_graph)
-            tf.summary.scalar('loss', self._loss)
-            self._merged_summary = tf.summary.merge_all()
-
-            step = 0
-            while True:
-                initial_observation = self._env.reset()
-                prev_state = self.preprocess_observation(initial_observation)
-                done = False
-                while not done and step < max_num_of_steps:
-                    action = self._get_action(prev_state, step, tf_session)
-                    observation, reward, done, _ = self._env.step(action)
-                    step += 1
-                    new_state = self.preprocess_observation(
-                        observation,
-                        state=prev_state,
-                    )
-                    self._replay_memory.append(
-                        (prev_state, action, reward, new_state)
-                    )
-                    # TODO: Wait until when?
-                    if step > MINIBATCH_SIZE:
-                        summary_str = self._optimize_Q(
-                            MINIBATCH_SIZE, GAMMA, tf_session
-                        )
-                        summary_writer.add_summary(
-                            summary_str, global_step=step
-                        )
-
-                    prev_state = new_state
-
-                if step >= max_num_of_steps:
-                    #saver.save(tf_session, 'checkpoints', global_step=step)
-                    return
-
-
-    def play_game(self):
-        pass
-    
     def _build_Q_graph(self):
         self._Q_graph_layers = []
         prev_layer = None
@@ -229,7 +145,96 @@ class AtariDQNAgent:
 #                decay=RMS_PROP_DECAY,
 #                epsilon=RMS_PROP_EPSILON,
             ).minimize(self._loss)
+            self.tf_summary['loss'] = tf.summary.scalar('loss', self._loss)
 
+    def get_num_of_actions(self):
+        return self._env.action_space.n
+
+    def preprocess_observation(
+        self,
+        observation,
+        state=None,
+        new_width=84,
+        new_height=110,
+        threshold=1,
+    ):
+        img = Image.fromarray(observation)
+        # TODO: remove resizing/grayscaling/thresholding.
+        img = img.convert('L')
+        new_size = (new_width, new_height) 
+        img = img.resize(new_size)
+        
+        obs = np.array(img)
+        
+        obs[obs < threshold] = 0
+        obs[obs >= threshold] = 255
+        obs = obs[-new_width:, :]
+
+        if state is None:
+            # Prepare and return the initial state.
+            # TODO: check the original code.
+            return np.stack([obs] * 4, axis=2)
+        else:
+            return np.append(
+                obs.reshape(new_width, new_width, 1),
+                state[:, :, 1:],
+                axis=2,
+            )
+
+        return obs
+
+    def train(self, max_num_of_steps):
+        # XXX: Default graph?
+        with self._Q_graph.as_default():
+            tf_session = tf.Session()
+
+            tf_session.run(tf.global_variables_initializer())
+            
+            #saver = tf.train.Saver()
+
+
+            step = 0
+
+            summary_writer = tf.summary.FileWriter('log')
+            summary_writer.add_graph(self._Q_graph, step)
+
+            while True:
+                initial_observation = self._env.reset()
+                prev_state = self.preprocess_observation(initial_observation)
+                done = False
+                while not done and step < max_num_of_steps:
+                    action = self._get_action(prev_state, step, tf_session)
+                    observation, reward, done, _ = self._env.step(action)
+                    step += 1
+                    new_state = self.preprocess_observation(
+                        observation,
+                        state=prev_state,
+                    )
+                    self._replay_memory.append(
+                        (prev_state, action, reward, new_state)
+                    )
+                    # TODO: Wait until when?
+                    if step > MINIBATCH_SIZE:
+                        loss_summary_str = self._optimize_Q(
+                            MINIBATCH_SIZE, GAMMA, tf_session
+                        )
+                        summary_writer.add_summary(
+                            loss_summary_str,
+                            step,
+                        )
+#                        self._optimize_Q(MINIBATCH_SIZE, GAMMA, tf_session)
+
+                    prev_state = new_state
+
+                if step >= max_num_of_steps:
+                    #saver.save(tf_session, 'checkpoints', global_step=step)
+                    summary_writer.close()
+                    return
+
+
+    def play_game(self):
+        pass
+    
     def _get_action(self, state, step, tf_session):
         n_steps = NUM_OF_STEPS_TO_MIN_EPSILON 
         if step < n_steps:
@@ -305,8 +310,8 @@ class AtariDQNAgent:
                     reward + (gamma * np.max(next_Qs[i]))
                 )
 
-        _, summary_str = tf_session.run(
-            [self._train_op, self._merged_summary],
+        _, loss_summary_str = tf_session.run(
+            [self._train_op, self.tf_summary['loss']],
             feed_dict={
                self._train_op_input['state']: minibatch['states'], 
                self._train_op_input['action']: minibatch['actions'], 
@@ -314,5 +319,13 @@ class AtariDQNAgent:
             }
         )
 
-        return summary_str
-   
+        return loss_summary_str
+
+#        tf_session.run(
+#            self._train_op,
+#            feed_dict={
+#               self._train_op_input['state']: minibatch['states'], 
+#               self._train_op_input['action']: minibatch['actions'], 
+#               self._train_op_input['y']: ys, 
+#            }
+#        )
