@@ -46,6 +46,8 @@ class AtariDQNAgent:
         self._Q_graph = tf.Graph()
         self._Q_graph_layers = None
         self._train_op_input = {}
+        self._loss = None
+        self._merged_summary = None
         with self._Q_graph.as_default():
             self._build_Q_graph()
 
@@ -85,27 +87,49 @@ class AtariDQNAgent:
 
         return obs
 
-    def train(self, num_of_frames, tf_session):
-        step = 0
-        while step < num_of_frames:
-            initial_observation = self._env.reset()
-            prev_state = self.preprocess_observation(
-                initial_observation,
-            )
-            done = False
-            while not done:
-                action = self._get_action(prev_state, step, tf_session)
-                observation, reward, done, _ = self.env.step(action)
-                step += 1
-                new_state = self.preprocess_observation(
-                    observation,
-                    last_state=prev_state,
-                )
-                self._replay_memory.append(
-                    (prev_state, action, reward, new_state)
-                )
-                self._optimize_Q(MINIBATCH_SIZE, GAMMA, tf_session)
-                prev_state = new_state
+    def train(self, max_num_of_steps):
+        # XXX: Default graph?
+        with self._Q_graph.as_default():
+            tf_session = tf.Session()
+
+            tf_session.run(tf.global_variables_initializer())
+            
+            #saver = tf.train.Saver()
+
+            summary_writer = tf.summary.FileWriter('log', self._Q_graph)
+            tf.summary.scalar('loss', self._loss)
+            self._merged_summary = tf.summary.merge_all()
+
+            step = 0
+            while True:
+                initial_observation = self._env.reset()
+                prev_state = self.preprocess_observation(initial_observation)
+                done = False
+                while not done and step < max_num_of_steps:
+                    action = self._get_action(prev_state, step, tf_session)
+                    observation, reward, done, _ = self._env.step(action)
+                    step += 1
+                    new_state = self.preprocess_observation(
+                        observation,
+                        state=prev_state,
+                    )
+                    self._replay_memory.append(
+                        (prev_state, action, reward, new_state)
+                    )
+                    # TODO: Wait until when?
+                    if step > MINIBATCH_SIZE:
+                        summary_str = self._optimize_Q(
+                            MINIBATCH_SIZE, GAMMA, tf_session
+                        )
+                        summary_writer.add_summary(
+                            summary_str, global_step=step
+                        )
+
+                    prev_state = new_state
+
+                if step >= max_num_of_steps:
+                    #saver.save(tf_session, 'checkpoints', global_step=step)
+                    return
 
 
     def play_game(self):
@@ -173,8 +197,10 @@ class AtariDQNAgent:
 
         with tf.variable_scope('train_op'):
             action = tf.placeholder(
-                tf.float32,
-                shape=(MINIBATCH_SIZE, self.get_num_of_actions()),
+                #tf.float32,
+                #shape=(MINIBATCH_SIZE, self.get_num_of_actions()),
+                dtype=tf.uint8,
+                shape=(MINIBATCH_SIZE),
                 name='action',
             )
             y = tf.placeholder(
@@ -190,7 +216,12 @@ class AtariDQNAgent:
                 'y': y,
             }
 
-            Q_of_action = tf.reduce_sum(tf.multiply(Q, action), axis=1)
+            one_hot_action = tf.one_hot(
+                action,
+                self.get_num_of_actions(),
+                dtype=tf.float32,
+            )
+            Q_of_action = tf.reduce_sum(tf.multiply(Q, one_hot_action), axis=1)
             # Use mean rather than sum to track the value of loss.
             self._loss = tf.reduce_mean(tf.square(y - Q_of_action))
             self._train_op = tf.train.RMSPropOptimizer(
@@ -206,7 +237,7 @@ class AtariDQNAgent:
         else:
             epsilon = MIN_EPSILON
         if random.random() < epsilon:
-            return self.env.action_space.sample()
+            return self._env.action_space.sample()
         else:
             return self._get_action_from_Q(state, tf_session)
 
@@ -258,7 +289,7 @@ class AtariDQNAgent:
         )
 
     def _optimize_Q(self, minibatch_size, gamma, tf_session):
-        minibatch = self.get_minibatch_from_replay_memory(minibatch_size)
+        minibatch = self._get_minibatch_from_replay_memory(minibatch_size)
         next_states = minibatch['next_states']
 
         ys = []
@@ -270,15 +301,18 @@ class AtariDQNAgent:
             if next_state is None:
                 ys.append(reward)
             else:
-                ys.append(reward, gamma * np.max(next_Qs[i]))
+                ys.append(
+                    reward + (gamma * np.max(next_Qs[i]))
+                )
 
-        tf_session.run(
-            self._train_op,
+        _, summary_str = tf_session.run(
+            [self._train_op, self._merged_summary],
             feed_dict={
                self._train_op_input['state']: minibatch['states'], 
                self._train_op_input['action']: minibatch['actions'], 
                self._train_op_input['y']: ys, 
             }
         )
-            
 
+        return summary_str
+   
