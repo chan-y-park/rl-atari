@@ -226,9 +226,13 @@ class AtariDQNAgent:
             self._loss_op = tf.reduce_mean(tf.square(y - Q_of_action))
             self._train_op = tf.train.RMSPropOptimizer(
                 learning_rate=self._config['learning_rate'],
-#                decay=0.9,
-                momentum = self._config['gradient_momentum'],
+                decay=0.9,
+#                momentum = self._config['gradient_momentum'],
                 epsilon=self._config['min_squared_gradient'],
+#                learning_rate=0.0002,
+#                decay=0.99,
+                momentum=0.0,
+#                epsilon=1e-6,
             ).minimize(self._loss_op)
             self.tf_summary['loss'] = tf.summary.scalar('loss', self._loss_op)
 
@@ -236,12 +240,14 @@ class AtariDQNAgent:
         W = tf.get_variable(
             'W',
             shape=W_shape,
-            initializer=self._get_variable_initializer()
+            #initializer=self._get_variable_initializer()
+            initializer=tf.constant_initializer(0.1)
         )
         b = tf.get_variable(
             'b',
             shape=b_shape,
-            initializer=self._get_variable_initializer()
+            #initializer=self._get_variable_initializer()
+            initializer=tf.constant_initializer(0.1)
         )
         return (W, b)
 
@@ -344,6 +350,8 @@ class AtariDQNAgent:
                 self._replay_memory.store(
                     prev_state, action, reward, new_state, int(done)
                 )
+                prev_state = new_state
+
                 # TODO: Wait until when?
                 if step > self._config['replay_start_size']:
                     loss, loss_summary_str = self._optimize_Q(
@@ -357,21 +365,18 @@ class AtariDQNAgent:
                         step,
                     )
 
-                prev_state = new_state
 
-                if step % 1000 == 0:
-                    print(
-                        'step: {}, ave. loss: {:g}, ave. reward: {:g}'
-                        .format(step, np.mean(self.losses), np.mean(rewards)),
-                    )
-                    #self.play_game(tf_session)
-                    save_path = saver.save(
-                        tf_session,
-                        'checkpoints/{}'.format(self.game_name),
-                        global_step=step,
-                    )
-                    import pdb
-                    pdb.set_trace()
+                    if step % 100 == 0:
+                        print(
+                            'step: {}, loss: {:g}, ave. reward: {:g}'
+                            .format(step, loss, np.mean(rewards)),
+                        )
+                        #self.play_game(tf_session)
+                        save_path = saver.save(
+                            tf_session,
+                            'checkpoints/{}'.format(self.game_name),
+                            global_step=step,
+                        )
 
             assert(step >= max_num_of_steps)
             self.play_game(tf_session)
@@ -479,9 +484,6 @@ class AtariDQNAgent:
                self._train_op_input['y']: ys, 
             }
         )
-
-        import pdb
-        pdb.set_trace()
 
         return (loss, loss_summary_str)
 
