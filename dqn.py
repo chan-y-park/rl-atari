@@ -11,9 +11,9 @@ import tensorflow as tf
 from PIL import Image
 
 # TODO
-# * reimplement replay memory using uint8 and avoid saving 4 frames.
-# * what to do with the stacking of states at the beginning of an episode.
+# * implement ave. Q measurement.
 # * rescaling rewards.
+# * what to do with the stacking of states at the beginning of an episode.
 # * check if render() works fine with python/ipython cli.
 
 #REPLAY_MEMORY_CAPACITY = 10 ** 6
@@ -40,13 +40,12 @@ DQN_Nature_configuration = {
     'var_init_stddev': 0.01,    # XXX
     'minibatch_size': 32,
     'replay_memory_size': 10 ** 6,
-#    'replay_memory_size': 10 ** 4,
     'agent_history_length': 4,
     'target_network_update_frequency': 10 ** 4,
 #    'discount_factor': 0.99,
     'discount_factor': 0.95,
     'action_repeat': 4,
-    'update_frequenct': 4,
+    'update_frequency': 4,
 #    'learning_rate': 0.00025,
     'learning_rate': 0.0002,
     'rms_prop_decay': 0.99,
@@ -57,8 +56,8 @@ DQN_Nature_configuration = {
     'min_squared_gradient': 1e-6,
     'initial_exploration': 1,
     'final_exploration': 0.1,
-#    'final_exploration_frame': 10 ** 6,
-    'final_exploration_frame': 10 ** 3,
+    'final_exploration_frame': 10 ** 6,
+#    'final_exploration_frame': 10 ** 3,
 #    'replay_start_size': 5 * (10 ** 4),
     'replay_start_size': 10 ** 2,
     'no-op_max': 30
@@ -396,19 +395,15 @@ class AtariDQNAgent:
                         print('step: {}, loss: {:g}, ave. reward: {:g}'
                               .format(step, loss, np.mean(rewards)))
 #                        self.play_game()
-#                        save_path = saver.save(
-#                            self._tf_session,
-#                            'checkpoints/{}'.format(self.game_name),
-#                            global_step=step,
-#                        )
+                    if step % 10000 == 0 or step == max_num_of_steps:
+                        save_path = saver.save(
+                            self._tf_session,
+                            'checkpoints/{}'.format(self.game_name),
+                            global_step=step,
+                        )
 
             assert(step >= max_num_of_steps)
 #            self.play_game()
-#            save_path = saver.save(
-#                tf_session,
-#                'checkpoints/{}'.format(self.game_name),
-#                global_step=step,
-#            )
             summary_writer.close()
             return save_path
 
