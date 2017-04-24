@@ -167,12 +167,12 @@ class AtariDQNAgent:
         self._env = gym.make(game_name)
         # XXX: Should we do skipping and stacking at the same time?
         # TODO: Remove the following hack
-#        self._env.__init__(
-#            game='breakout',
-#            obs_type='image',
-#            frameskip=1,
-#            repeat_action_probability=1,
-#        )
+        self._env.env.__init__(
+            game='breakout',
+            obs_type='image',
+            frameskip=4,
+            repeat_action_probability=0.25,
+        )
         self._replay_memory = ReplayMemory(config=self._config)
 
 #        self.losses = deque(maxlen=1000)
@@ -186,6 +186,8 @@ class AtariDQNAgent:
         self._graph = tf.Graph()
         with self._graph.as_default():
             self._build_graph()
+            self._tf_session = tf.Session()
+            self._tf_session.run(tf.global_variables_initializer())
 
     def _build_graph(self):
         self._Q_network_layers = []
@@ -307,6 +309,37 @@ class AtariDQNAgent:
         )
         return (W, b)
 
+    def save_weights(self, path='weights_npy/'):
+        # XXX API for test
+        import json
+        npy = {}
+        for layer_name in ('conv1', 'conv2', 'fc1', 'output'):
+            npy[layer_name] = {}
+            for var_name in ('W', 'b'):
+                t = self._graph.get_tensor_by_name(
+                    '{}/{}:0'.format(layer_name, var_name)
+                )
+                v = self._tf_session.run(t)
+                npy_file_name = '{}_{}.npy'.format(layer_name, var_name)
+                np.save(path + npy_file_name, v)
+                npy[layer_name][var_name] = npy_file_name
+        with open(path + 'npy.json', 'w') as fp:
+            json.dump(npy, fp)
+
+    def load_weights(self, path='weights_npy/'):
+        # XXX API for test
+        import json
+        with open(path + 'npy.json', 'r') as fp:
+            npy = json.load(fp)
+        for layer_name, layer_conf in npy.items():
+            for var_name, npy_file_name in layer_conf.items():
+                v = np.load(path + npy_file_name)
+                t = self._graph.get_tensor_by_name(
+                    '{}/{}:0'.format(layer_name, var_name)
+                )
+                tf.assign(t, v)
+                self._tf_session.run(t)
+        
     def _get_variable_initializer(self):
         # TODO: Check the original initialization
         return tf.truncated_normal_initializer(
@@ -316,7 +349,8 @@ class AtariDQNAgent:
         )
 
     def get_num_of_actions(self):
-        return self._env.action_space.n
+        #return self._env.action_space.n
+        return 4
 
     def preprocess_observation(
         self,
@@ -330,13 +364,14 @@ class AtariDQNAgent:
         img = img.convert('L')
         new_size = (new_width, new_height) 
         img = img.resize(new_size)
-        obs = np.array(img, dtype=np.float32)
+        #obs = np.array(img, dtype=np.float32)
+        obs = np.array(img, dtype=np.uint8)
 
         # TODO: Use the following grayscaling without resizing.
 #        obs = np.average(observation, weights=[0.299, 0.587, 0.114], axis=2)
         
-        obs[obs < threshold] = 0
-        obs[obs >= threshold] = 255
+#        obs[obs < threshold] = 0
+#        obs[obs >= threshold] = 255
         obs = obs[-new_width:, :]
         return obs
 
@@ -354,10 +389,6 @@ class AtariDQNAgent:
     def train(self, max_num_of_steps, save_path=None):
 
         with self._graph.as_default():
-            self._tf_session = tf.Session()
-
-            self._tf_session.run(tf.global_variables_initializer())
-
             saver = tf.train.Saver()
             if save_path is not None:
                 saver.restore(self._tf_session, save_path) 
@@ -412,26 +443,43 @@ class AtariDQNAgent:
         self,
         save_path=None,
         render=False,
+        num_of_episodes=10,
     ):
         play_images = []
         if self._tf_session is not None:
             initial_observation = self._env.reset()
             state = self.preprocess_observation(initial_observation)
+            stacked_states = np.array(
+                np.stack([state] * 4, axis=2),
+                dtype=np.float32,
+            )[np.newaxis,:,:,:]
             done = False
-            while not done:
-                action = self._get_action_from_Q(state)
+            #while not done:
+            while num_of_episodes > 0:
+                action = self._get_action(
+                    10 ** 6,
+                    stacked_states,
+                )
                 observation, reward, done, _ = self._env.step(action)
+                print('action {}:, reward: {}, done: {}.'
+                      .format(action, reward, done))
                 if render:
                     self._env.render()
                 state = self.preprocess_observation(observation)
+                stacked_states[:,:,:,:-1] = stacked_states[:,:,:,1:]
+                stacked_states[:,:,:,-1] = state[np.newaxis,:,:]
                 play_images.append(Image.fromarray(observation))
+                if done:
+                    self._env.reset()
+                    num_of_episodes -= 1
+                    
         play_images[0].save(
             'play.gif',
             save_all=True,
             append_images=play_images[1:],
         )
     
-    def _get_action(self, step):
+    def _get_action(self, step, stacked_states=None):
         n_steps = self._config['final_exploration_frame'] 
         min_epsilon = self._config['final_exploration']
         if step < n_steps:
@@ -445,14 +493,16 @@ class AtariDQNAgent:
         ):
             return self._env.action_space.sample()
         else:
-            return self._get_action_from_Q()
+            return self._get_action_from_Q(stacked_states)
 
-    def _get_action_from_Q(self):
-        stacked_states = np.array(
-            self._replay_memory.get_stacked_states(),
-            dtype=np.float32,
-        )
-        Qs = self._get_Q_values(stacked_states)
+    def _get_action_from_Q(self, stacked_states=None):
+        if stacked_states is None:
+            stacked_states = np.array(
+                self._replay_memory.get_stacked_states(),
+                dtype=np.float32,
+            )
+#        Qs = self._get_Q_values(stacked_states)
+        Qs = self._get_Q_values(stacked_states / 255.0)
         # TODO: Tiebreaking
         return np.argmax(Qs)
 
