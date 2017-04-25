@@ -11,23 +11,14 @@ import tensorflow as tf
 from PIL import Image
 
 # TODO
-# * implement ave. Q measurement.
+# * implement ave. Q measurement, plotting measurements.
 # * rescaling rewards.
 # * what to do with the stacking of states at the beginning of an episode.
 # * check if render() works fine with python/ipython cli.
+# * test nonzero momemtun.
+# * original Lua code does learning rate annealation.
 
-#REPLAY_MEMORY_CAPACITY = 10 ** 6
-#NUM_OF_FRAMES_TO_STACK = 4
-#MINIBATCH_SIZE = 32
-#GAMMA = 0.95 # TODO: check original code
-#NUM_OF_STEPS_TO_MIN_EPSILON = 10 ** 6
-#MIN_EPSILON = 0.1
-#
-#RMS_PROP_LEARNING_RATE = 0.0002 # TODO: check original code
-#RMS_PROP_DECAY = 0.99 # TODO: check original code
-#RMS_PROP_EPSILON = 1e-6 # TODO: check original code
-
-DQN_Nature_configuration = {
+DQN_configuration = {
     'Q_network': [
         ('input', {}),
         ('conv1', {'W_size': 8, 'stride': 4, 'in': 4, 'out': 16}),
@@ -41,26 +32,24 @@ DQN_Nature_configuration = {
     'minibatch_size': 32,
     'replay_memory_size': 10 ** 6,
     'agent_history_length': 4,
-    'target_network_update_frequency': 10 ** 4,
+#    'target_network_update_frequency': 10 ** 4,
 #    'discount_factor': 0.99,
     'discount_factor': 0.95,
     'action_repeat': 4,
     'update_frequency': 4,
 #    'learning_rate': 0.00025,
     'learning_rate': 0.0002,
-    'rms_prop_decay': 0.99,
-#    'gradient_momentum': 0.95,
+    'rms_prop_decay': 0.95,
     'gradient_momentum': 0.0,
-    'squared_gradient_momentum': 0.95,
-#    'min_squared_gradient': 0.01,
-    'min_squared_gradient': 1e-6,
+    'min_squared_gradient': 0.01,
     'initial_exploration': 1,
     'final_exploration': 0.1,
     'final_exploration_frame': 10 ** 6,
-#    'final_exploration_frame': 10 ** 3,
-#    'replay_start_size': 5 * (10 ** 4),
-    'replay_start_size': 10 ** 2,
-    'no-op_max': 30
+    #'replay_start_size': 5 * (10 ** 4),
+    'replay_start_size': (10 ** 2),
+    'no-op_max': 30,
+    #'validation_size': 500,
+    'validation_size': 50,
 }
 
 IMG_SCALE = 255.0
@@ -131,51 +120,79 @@ class ReplayMemory:
             current_size = self.index
         return current_size
 
-    def sample_minibatch(self):
+    def get_samples(self, sample_size):
         current_size = self.get_size()
-        if current_size < self.minibatch_size:
+        if current_size < sample_size:
             raise RuntimeError(
                 'Number of states {} less than minibatch size {}'
-                .format(current_size, self.minibatch_size)
+                .format(current_size, sample_size)
             )
         samples = np.random.randint(
             low=(self.agent_history_length - 1),
             # XXX The following cannot sample self.states[self.size]
             # even when the next state is available as self.states[0].
             high=(current_size - 1),
-            size=self.minibatch_size,
+            size=sample_size,
         )
-####
-        self._samples = samples
-####
+        return samples
+
+    def sample_minibatch(self):
+#        current_size = self.get_size()
+#        if current_size < self.minibatch_size:
+#            raise RuntimeError(
+#                'Number of states {} less than minibatch size {}'
+#                .format(current_size, self.minibatch_size)
+#            )
+#        samples = np.random.randint(
+#            low=(self.agent_history_length - 1),
+#            # XXX The following cannot sample self.states[self.size]
+#            # even when the next state is available as self.states[0].
+#            high=(current_size - 1),
+#            size=self.minibatch_size,
+#        )
+        samples = self.get_samples(self.minibatch_size)
         h = self.agent_history_length       
         for i in range(self.minibatch_size):
             j = samples[i]
-            self._minibatch['states'][i] = np.transpose(
-                self.states[(j - h + 1):(j + 1),:,:],
-                (1, 2, 0),
-            ) / IMG_SCALE
-            self._minibatch['next_states'][i] = np.transpose(
-                self.states[(j - h + 2):(j + 2),:,:],
-                (1, 2, 0),
-            ) / IMG_SCALE
+#            self._minibatch['states'][i] = np.transpose(
+#                self.states[(j - h + 1):(j + 1),:,:],
+#                (1, 2, 0),
+#            ) / IMG_SCALE
+#            self._minibatch['next_states'][i] = np.transpose(
+#                self.states[(j - h + 2):(j + 2),:,:],
+#                (1, 2, 0),
+#            ) / IMG_SCALE
+        self.fill_states(samples, self._minibatch['states'])
+        self.fill_states(samples, self._minibatch['next_states'], offset=1)
         self._minibatch['actions'] = self.actions[samples]
         self._minibatch['rewards'] = self.rewards[samples]
         self._minibatch['terminals'] = self.terminals[samples]
 
         return self._minibatch
 
+    def fill_states(self, samples, buf_states, offset=0):
+        h = self.agent_history_length       
+        for i in range(len(samples)):
+            j = samples[i]
+            buf_states[i] = np.transpose(
+                self.states[(j - h + 1 + offset):(j + 1 + offset),:,:],
+                (1, 2, 0),
+            ) / IMG_SCALE
+            
+
 class AtariDQNAgent:
     def __init__(self, game_name='Breakout-v0'):
         # TODO: Check random seed usages.
         self.game_name = game_name
+
         log_dir = './log'
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
         checkpoints_dir = './checkpoints'
         if not os.path.exists(checkpoints_dir):
             os.makedirs(checkpoints_dir)
-        self._config = DQN_Nature_configuration
+
+        self._config = DQN_configuration
         self._random_seed = None
 #        self._env = gym.make(game_name)
         self.emulator = Emulator()
@@ -189,6 +206,7 @@ class AtariDQNAgent:
 #        )
         self._replay_memory = ReplayMemory(config=self._config)
 
+        self._validation_states = None 
         self._Q_network_layers = None
         self._train_op_input = {}
         self._loss_op = None
@@ -296,11 +314,7 @@ class AtariDQNAgent:
                 tf.multiply(Q_output, one_hot_actions),
                 axis=1,
             )
-####
-            self.Qs_of_action = Qs_of_action
-####
             self._loss_op = tf.reduce_mean(tf.square(ys - Qs_of_action))
-            # TODO Check original paremeters, especially momentum.
             self._train_op = tf.train.RMSPropOptimizer(
                 learning_rate=self._config['learning_rate'],
                 decay=self._config['rms_prop_decay'],
@@ -314,46 +328,14 @@ class AtariDQNAgent:
             'W',
             shape=W_shape,
             initializer=self._get_variable_initializer()
-            #initializer=tf.constant_initializer(0.1)
         )
         b = tf.get_variable(
             'b',
             shape=b_shape,
             initializer=self._get_variable_initializer()
-            #initializer=tf.constant_initializer(0.1)
         )
         return (W, b)
 
-    def save_weights(self, path='weights_npy/'):
-        # XXX API for test
-        import json
-        npy = {}
-        for layer_name in ('conv1', 'conv2', 'fc1', 'output'):
-            npy[layer_name] = {}
-            for var_name in ('W', 'b'):
-                t = self._graph.get_tensor_by_name(
-                    '{}/{}:0'.format(layer_name, var_name)
-                )
-                v = self._tf_session.run(t)
-                npy_file_name = '{}_{}.npy'.format(layer_name, var_name)
-                np.save(path + npy_file_name, v)
-                npy[layer_name][var_name] = npy_file_name
-        with open(path + 'npy.json', 'w') as fp:
-            json.dump(npy, fp)
-
-    def load_weights(self, path='weights_npy/'):
-        # XXX API for test
-        import json
-        with open(path + 'npy.json', 'r') as fp:
-            npy = json.load(fp)
-        for layer_name, layer_conf in npy.items():
-            for var_name, npy_file_name in layer_conf.items():
-                v = np.load(path + npy_file_name)
-                t = self._graph.get_tensor_by_name(
-                    '{}/{}:0'.format(layer_name, var_name)
-                )
-                self._tf_session.run(tf.assign(t, v))
-        
     def _get_variable_initializer(self):
         # TODO: Check the original initialization
         return tf.truncated_normal_initializer(
@@ -363,7 +345,7 @@ class AtariDQNAgent:
         )
 
     def get_num_of_actions(self):
-#        return self._env.action_space.n
+        #return self._env.action_space.n
         return len(self.emulator.legal_actions)
 
     def preprocess_observation(
@@ -389,136 +371,6 @@ class AtariDQNAgent:
         obs = obs[-new_width:, :]
         return obs
 
-#        if state is None:
-#            # Prepare and return the initial state.
-#            # TODO: check the original code.
-#            return np.stack([obs] * 4, axis=2)
-#        else:
-#            return np.append(
-#                obs.reshape(new_width, new_width, 1),
-#                state[:, :, 1:],
-#                axis=2,
-#            )
-
-#    def train(self, max_num_of_steps, save_path=None, step=None):
-#
-#        with self._graph.as_default():
-#            saver = tf.train.Saver()
-#            if save_path is not None:
-#                saver.restore(self._tf_session, save_path) 
-#                step = self._get_step_from_checkpoint(save_path)
-#            elif step is None:
-#                step = 0
-#
-#            rewards_per_episode = []
-#            rewards = []
-#
-#            summary_writer = tf.summary.FileWriter('log')
-#            # TODO: check if add_graph is necessary.
-#            summary_writer.add_graph(self._graph, step)
-#
-#            done = True
-#            episode = 1
-#            while step < max_num_of_steps:
-#                if done:
-##                    initial_observation = self._env.reset()
-#                    initial_observation = self.emulator.new_game()
-#                    state = self.preprocess_observation(initial_observation)
-#                    done = False
-#                    episode += 1
-#                    rewards_per_episode.append(0)
-#
-#                n_steps = self._config['final_exploration_frame'] 
-#                min_epsilon = self._config['final_exploration']
-#                if step < n_steps:
-#                    epsilon = 1 - (1 - min_epsilon) / n_steps * step 
-#                else:
-#                    epsilon = min_epsilon
-#
-#                action = self._get_action(epsilon)
-##                observation, reward, done, _ = self._env.step(action)
-#                observation, reward, done = self.emulator.next(action)
-#                rewards.append(reward)
-#                rewards_per_episode[-1] += reward
-#                step += 1
-#                state = self.preprocess_observation(observation)
-#                self._replay_memory.store(state, action, reward, int(done))
-#
-#                # TODO: Wait until when?
-#                if (
-#                    self._replay_memory.get_size()
-#                    > self._config['replay_start_size']
-#                ):
-#                    loss, loss_summary_str = self._optimize_Q()
-#                    summary_writer.add_summary(loss_summary_str, step)
-#
-#                    if step % 1000 == 0:
-#                        print('step: {}, loss: {:g}, ave. reward: {:g}'
-#                              .format(step, loss, np.mean(rewards_per_episode)))
-#                    if step % 10000 == 0 or step == max_num_of_steps:
-#                        save_path = saver.save(
-#                            self._tf_session,
-#                            'checkpoints/{}'.format(self.game_name),
-#                            global_step=step,
-#                        )
-#                        self.play_game()
-#                    if step % 50000 == 0:
-#                        rewards_per_episode = rewards_per_episode[-1:]
-#
-#            summary_writer.close()
-#            return save_path
-#
-#
-#    def play_game(
-#        self,
-#        save_path=None,
-#        render=False,
-#        num_of_episodes=1,
-#    ):
-#        play_images = []
-#        actions = []
-#        rewards = []
-#        if self._tf_session is not None:
-##            initial_observation = self._env.reset()
-#            initial_observation = self.emulator.new_game()
-#            state = self.preprocess_observation(initial_observation)
-##            stacked_states = np.array(
-##                np.stack([state] * 4, axis=2),
-##                dtype=np.float32,
-##            )[np.newaxis,:,:,:]
-#            done = False
-#            #while not done:
-#            while num_of_episodes > 0:
-#                action = self._get_action(
-#                    0.1,
-##                    np.array(stacked_states, dtype=np.float32) / IMG_SCALE,
-#                    self._replay_memory.get_stacked_states()
-#                )
-#                actions.append(action)
-##                observation, reward, done, _ = self._env.step(action)
-#                observation, reward, done = self.emulator.next(action)
-#                state = self.preprocess_observation(observation)
-#                self._replay_memory.store(state, action, reward, int(done))
-#                rewards.append(reward)
-##                print('action {}:, reward: {}, done: {}.'
-##                      .format(action, reward, done))
-##                if render:
-##                    self._env.render()
-##                stacked_states[:,:,:,:-1] = stacked_states[:,:,:,1:]
-##                stacked_states[:,:,:,-1] = state[np.newaxis,:,:]
-#                play_images.append(Image.fromarray(observation))
-#                if done:
-##                    self._env.reset()
-#                    self.emulator.new_game()
-#                    num_of_episodes -= 1
-#                    
-#        play_images[0].save(
-#            'play.gif',
-#            save_all=True,
-#            append_images=play_images[1:],
-#        )
-#        return (actions, rewards)
-    
     def play(
         self,
         max_num_of_steps=(10**6),
@@ -532,6 +384,11 @@ class AtariDQNAgent:
         c = self._config['agent_history_length']
         n_steps = self._config['final_exploration_frame'] 
         min_epsilon = self._config['final_exploration']
+        stats = {
+            'average_loss': [],
+            'average_reward': [],
+            'average_Q': [],
+        }
 
         with self._graph.as_default():
             if train:
@@ -591,25 +448,47 @@ class AtariDQNAgent:
 
                 # TODO: Wait until when?
                 if train:
-                    if(
-                        self._replay_memory.get_size()
-                        < self._config['replay_start_size']
-                    ):
+                    rss = self._config['replay_start_size']
+                    if (self._replay_memory.get_size() < rss):
                         continue
+
+                    elif (self._validation_states is None):
+                        vs = self._config['validation_size']
+                        self._validation_states = np.zeros(
+                            (vs, s, s, c), dtype=np.float32,
+                        )
+                        samples = self._replay_memory.get_samples(vs)
+                        self._replay_memory.fill_states(
+                            samples,
+                            self._validation_states,
+                        )
 
                     loss, loss_summary_str = self._optimize_Q()
                     summary_writer.add_summary(loss_summary_str, step)
                     losses[-1] += loss
 
                     if (step % 1000 == 0):
+                        Qs_validation = np.amax(
+                            self._get_Q_values(self._validation_states),
+                            axis=1,
+                        )
+                        ave_loss = np.mean(loss)
+                        ave_reward = np.mean(rewards_per_episode)
+                        ave_Q = np.mean(Qs_validation)
                         print(
-                            'step: {}, ave. loss: {:g}, ave. reward: {:g}'
+                            'step: {}, ave. loss: {:g}, '
+                            'ave. reward: {:g}, ave. Q: {:g}'
                             .format(
                                 step,
-                                np.mean(loss),
-                                np.mean(rewards_per_episode),
+                                ave_loss,
+                                ave_reward,
+                                ave_Q,
                             )
                         )
+                        stats['average_loss'].append(ave_loss)
+                        stats['average_reward'].append(ave_reward)
+                        stats['average_Q'].append(ave_Q)
+
                     if (step % 10000 == 0 or step == max_num_of_steps):
                         save_path = saver.save(
                             self._tf_session,
@@ -617,6 +496,8 @@ class AtariDQNAgent:
                             global_step=step,
                         )
                         print('checkpoint saved at {}'.format(save_path))
+                        plot_stats(stats)
+
                     if (step % 50000 == 0):
                         rewards_per_episode = rewards_per_episode[-1:]
                         losses = losses[-1:]
@@ -633,6 +514,7 @@ class AtariDQNAgent:
 
             if train:
                 summary_writer.close()
+                return stats
             else:
                 play_images[0].save(
                     'play.gif',
@@ -663,36 +545,65 @@ class AtariDQNAgent:
             #feed_dict={self._Q_network_layers[0]: states},
         )
 
-#    def _fill_minibatch_from_replay_memory(self, minibatch):
-#        # TODO: Build minibatch from GPU-side
-#        # In the replay memory, states/next_states have np.uint8 dtype.
-#        experiences = random.sample(
-#            self._replay_memory,
-#            self._config['minibatch_size'],
+    def _optimize_Q(self):
+        gamma = self._config['discount_factor']
+        minibatch = self._replay_memory.sample_minibatch()
+#        minibatch = self._get_minibatch_from_npy(
+#            '/home/chan/workspace/DQN_tensorflow-master/batch_npy'
 #        )
-#
-#        for i, e in enumerate(experiences):
-#            state, action, reward, next_state, terminal = e
-#            minibatch['states'][i] = state
-#            minibatch['actions'][i] = action
-#            minibatch['rewards'][i] = reward
-#            minibatch['next_states'][i] = next_state
-#            minibatch['terminals'][i] = terminal 
+        mask = (1 - minibatch['terminals'])
+        Qs_next = self._get_Q_values(minibatch['next_states'])
+        ys = minibatch['rewards'] + gamma * (
+            np.amax(
+                Qs_next * mask[:, np.newaxis],
+                axis=1,
+            )
+        )
 
-    # XXX for debug 
+        _, loss, loss_summary_str = self._tf_session.run(
+            [self._train_op, self._loss_op, self._tf_summary['loss']],
+            feed_dict={
+               self._train_op_input['states']: minibatch['states'], 
+               self._train_op_input['actions']: minibatch['actions'], 
+               self._train_op_input['ys']: ys, 
+            }
+        )
+
+        return (loss, loss_summary_str)
+
+    def _get_step_from_checkpoint(self, save_path):
+        return int(save_path.split('-')[-1])
+
+# XXX APIs for debugging
+    def save_weights(self, path='weights_npy/'):
+        import json
+        npy = {}
+        for layer_name in ('conv1', 'conv2', 'fc1', 'output'):
+            npy[layer_name] = {}
+            for var_name in ('W', 'b'):
+                t = self._graph.get_tensor_by_name(
+                    '{}/{}:0'.format(layer_name, var_name)
+                )
+                v = self._tf_session.run(t)
+                npy_file_name = '{}_{}.npy'.format(layer_name, var_name)
+                np.save(path + npy_file_name, v)
+                npy[layer_name][var_name] = npy_file_name
+        with open(path + 'npy.json', 'w') as fp:
+            json.dump(npy, fp)
+
+    def load_weights(self, path='weights_npy/'):
+        import json
+        with open(path + 'npy.json', 'r') as fp:
+            npy = json.load(fp)
+        for layer_name, layer_conf in npy.items():
+            for var_name, npy_file_name in layer_conf.items():
+                v = np.load(path + npy_file_name)
+                t = self._graph.get_tensor_by_name(
+                    '{}/{}:0'.format(layer_name, var_name)
+                )
+                self._tf_session.run(tf.assign(t, v))
+
     def _get_minibatch_from_npy(self, npy_path):
-#        m = self._config['minibatch_size']
-#        h = self._config['agent_history_length']
-#        s = self._config['Q_network_input_size']
-#        minibatch = {
-#            'states': np.zeros((m, s, s, h), dtype=np.float32),
-#            'actions' : np.zeros(m, dtype=np.uint8),
-#            'rewards': np.zeros(m, dtype=np.float32),
-#            'next_states': np.zeros((m, s, s, h), dtype=np.float32),
-#            'terminals': np.zeros(m, dtype=np.uint8),
-#        }
-#        for k in minibatch.keys():
-#            minibatch[k] = np.load('{}/{}.npy'.format(npy_path, k))
         minibatch = {
             'states': np.float32,
             'actions' : np.uint8,
@@ -720,61 +631,29 @@ class AtariDQNAgent:
                 '{}/{}.npy'.format(npy_path, name),
                 self._replay_memory._minibatch[name]
             )
+# XXX
 
-    def _optimize_Q(self):
-        gamma = self._config['discount_factor']
-        minibatch = self._replay_memory.sample_minibatch()
-#        #states, actions, rewards, next_states, terminals = minibatch
-#        minibatch = self._get_minibatch_from_npy(
-#            '/home/chan/workspace/DQN_tensorflow-master/batch_npy'
-#        )
-        mask = (1 - minibatch['terminals'])
-        Qs_next = self._get_Q_values(minibatch['next_states'])
-        ys = minibatch['rewards'] + gamma * (
-            np.amax(
-                Qs_next * mask[:, np.newaxis],
-                axis=1,
-            )
-        )
 
-        _, loss, loss_summary_str, Qs_of_action = self._tf_session.run(
-            [self._train_op, self._loss_op, self._tf_summary['loss'],
-             self.Qs_of_action],
-            feed_dict={
-               self._train_op_input['states']: minibatch['states'], 
-               self._train_op_input['actions']: minibatch['actions'], 
-               self._train_op_input['ys']: ys, 
-            }
-        )
+from matplotlib import pyplot
 
-        return (loss, loss_summary_str)
 
-#    def _optimize_Q(self, gamma, tf_session):
-#
-#        m = self._config['minibatch_size']
-#        minibatch = self._replay_memory.sample_minibatch(m)
-#        states, actions, rewards, next_states, terminals = minibatch
-#
-#        Qs_next = np.amax(self._get_Q_values(next_states, tf_session), axis=1)
-#
-#        _, loss, loss_summary_str = tf_session.run(
-#            [self._train_op, self._loss_op, self._tf_summary['loss']],
-#            feed_dict={
-#               self._train_op_input['states']: states, 
-#               self._train_op_input['actions']: actions, 
-#               self._train_op_input['rewards']: rewards, 
-#               self._train_op_input['terminals']: terminals, 
-#               self._train_op_input['Qs_next']: Qs_next, 
-#            }
-#        )
+def plot_stats(stats):
+    plot_dir = 'plots'
+    pyplot.plot(stats['average_Q'])
+    pyplot.savefig('{}/average_Q.pdf'.format(plot_dir))
+    pyplot.close()
+    
+    pyplot.plot(stats['average_loss'])
+    pyplot.savefig('{}/average_loss.pdf'.format(plot_dir))
+    pyplot.close()
+    
+    pyplot.plot(stats['average_reward'])
+    pyplot.savefig('{}/average_reward.pdf'.format(plot_dir))
+    pyplot.close()
 
-        return (loss, loss_summary_str)
-    def _get_step_from_checkpoint(self, save_path):
-        return int(save_path.split('-')[-1])
 
 #import atari_py.ALEInterface as ALEInterface
 from ale_python_interface import ALEInterface
-
 
 def _as_bytes(s):
     if hasattr(s, 'encode'):
@@ -798,7 +677,7 @@ class Emulator:
                 'breakout.bin'
             )
         )
-        self.legal_actions = self.ale.getMinimalActionSet()[:4]
+        self.legal_actions = self.ale.getMinimalActionSet()
         self.action_map = dict()
         self.screen_width, self.screen_height = self.ale.getScreenDims()
 
