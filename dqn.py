@@ -96,33 +96,33 @@ class ReplayMemory:
             self.full = True
             self.index = 0
 
-    def get_stacked_states(self):
-        h = self.agent_history_length
-        i_start = self.index - h 
-        if i_start < 0:
-            if not self.full:
-#                raise RuntimeError(
-#                    'Need at least 4 states in the replay memory.'
+#    def get_stacked_states(self):
+#        h = self.agent_history_length
+#        i_start = self.index - h 
+#        if i_start < 0:
+#            if not self.full:
+##                raise RuntimeError(
+##                    'Need at least 4 states in the replay memory.'
+##                )
+#                indices = (
+#                    [0] * abs(i_start) + [i for i in range(0, self.index)]
 #                )
-                indices = (
-                    [0] * abs(i_start) + [i for i in range(0, self.index)]
-                )
-            else:
-                i_start += self.size
-                indices = [
-                    i  % self.size
-                    for i in range(i_start, i_start + h)
-                ]
-        else:
-            indices = [i for i in range(i_start, i_start + h)
-####
-        print(indices)
-####
-        stacked_states = np.array(
-            self.states[indices].transpose(1, 2, 0)[np.newaxis,:,:,:],
-            dtype=np.float32,
-        ) / IMG_SCALE
-        return stacked_states
+#            else:
+#                i_start += self.size
+#                indices = [
+#                    i  % self.size
+#                    for i in range(i_start, i_start + h)
+#                ]
+#        else:
+#            indices = [i for i in range(i_start, i_start + h)
+#####
+#        print(indices)
+#####
+#        stacked_states = np.array(
+#            self.states[indices].transpose(1, 2, 0)[np.newaxis,:,:,:],
+#            dtype=np.float32,
+#        ) / IMG_SCALE
+#        return stacked_states
 
     def get_size(self):
         if self.full:
@@ -400,139 +400,252 @@ class AtariDQNAgent:
 #                axis=2,
 #            )
 
-    def train(self, max_num_of_steps, save_path=None, step=None):
+#    def train(self, max_num_of_steps, save_path=None, step=None):
+#
+#        with self._graph.as_default():
+#            saver = tf.train.Saver()
+#            if save_path is not None:
+#                saver.restore(self._tf_session, save_path) 
+#                step = self._get_step_from_checkpoint(save_path)
+#            elif step is None:
+#                step = 0
+#
+#            rewards_per_episode = []
+#            rewards = []
+#
+#            summary_writer = tf.summary.FileWriter('log')
+#            # TODO: check if add_graph is necessary.
+#            summary_writer.add_graph(self._graph, step)
+#
+#            done = True
+#            episode = 1
+#            while step < max_num_of_steps:
+#                if done:
+##                    initial_observation = self._env.reset()
+#                    initial_observation = self.emulator.new_game()
+#                    state = self.preprocess_observation(initial_observation)
+#                    done = False
+#                    episode += 1
+#                    rewards_per_episode.append(0)
+#
+#                n_steps = self._config['final_exploration_frame'] 
+#                min_epsilon = self._config['final_exploration']
+#                if step < n_steps:
+#                    epsilon = 1 - (1 - min_epsilon) / n_steps * step 
+#                else:
+#                    epsilon = min_epsilon
+#
+#                action = self._get_action(epsilon)
+##                observation, reward, done, _ = self._env.step(action)
+#                observation, reward, done = self.emulator.next(action)
+#                rewards.append(reward)
+#                rewards_per_episode[-1] += reward
+#                step += 1
+#                state = self.preprocess_observation(observation)
+#                self._replay_memory.store(state, action, reward, int(done))
+#
+#                # TODO: Wait until when?
+#                if (
+#                    self._replay_memory.get_size()
+#                    > self._config['replay_start_size']
+#                ):
+#                    loss, loss_summary_str = self._optimize_Q()
+#                    summary_writer.add_summary(loss_summary_str, step)
+#
+#                    if step % 1000 == 0:
+#                        print('step: {}, loss: {:g}, ave. reward: {:g}'
+#                              .format(step, loss, np.mean(rewards_per_episode)))
+#                    if step % 10000 == 0 or step == max_num_of_steps:
+#                        save_path = saver.save(
+#                            self._tf_session,
+#                            'checkpoints/{}'.format(self.game_name),
+#                            global_step=step,
+#                        )
+#                        self.play_game()
+#                    if step % 50000 == 0:
+#                        rewards_per_episode = rewards_per_episode[-1:]
+#
+#            summary_writer.close()
+#            return save_path
+#
+#
+#    def play_game(
+#        self,
+#        save_path=None,
+#        render=False,
+#        num_of_episodes=1,
+#    ):
+#        play_images = []
+#        actions = []
+#        rewards = []
+#        if self._tf_session is not None:
+##            initial_observation = self._env.reset()
+#            initial_observation = self.emulator.new_game()
+#            state = self.preprocess_observation(initial_observation)
+##            stacked_states = np.array(
+##                np.stack([state] * 4, axis=2),
+##                dtype=np.float32,
+##            )[np.newaxis,:,:,:]
+#            done = False
+#            #while not done:
+#            while num_of_episodes > 0:
+#                action = self._get_action(
+#                    0.1,
+##                    np.array(stacked_states, dtype=np.float32) / IMG_SCALE,
+#                    self._replay_memory.get_stacked_states()
+#                )
+#                actions.append(action)
+##                observation, reward, done, _ = self._env.step(action)
+#                observation, reward, done = self.emulator.next(action)
+#                state = self.preprocess_observation(observation)
+#                self._replay_memory.store(state, action, reward, int(done))
+#                rewards.append(reward)
+##                print('action {}:, reward: {}, done: {}.'
+##                      .format(action, reward, done))
+##                if render:
+##                    self._env.render()
+##                stacked_states[:,:,:,:-1] = stacked_states[:,:,:,1:]
+##                stacked_states[:,:,:,-1] = state[np.newaxis,:,:]
+#                play_images.append(Image.fromarray(observation))
+#                if done:
+##                    self._env.reset()
+#                    self.emulator.new_game()
+#                    num_of_episodes -= 1
+#                    
+#        play_images[0].save(
+#            'play.gif',
+#            save_all=True,
+#            append_images=play_images[1:],
+#        )
+#        return (actions, rewards)
+    
+    def play(
+        self,
+        max_num_of_steps=(10**6),
+        max_num_of_episodes=None,
+        train=True,
+        save_path=None,
+        step=None,
+    ):
+
+        s = self._config['Q_network_input_size']
+        c = self._config['agent_history_length']
+        n_steps = self._config['final_exploration_frame'] 
+        min_epsilon = self._config['final_exploration']
 
         with self._graph.as_default():
-            saver = tf.train.Saver()
-            if save_path is not None:
-                saver.restore(self._tf_session, save_path) 
-                step = self._get_step_from_checkpoint(save_path)
-            elif step is None:
+            if train:
+                summary_writer = tf.summary.FileWriter('log')
+                # TODO: check if add_graph is necessary.
+                summary_writer.add_graph(self._graph, step)
+
+                saver = tf.train.Saver()
+                if save_path is not None:
+                    saver.restore(self._tf_session, save_path) 
+                    step = self._get_step_from_checkpoint(save_path)
+            else:
+                play_images = []
+                actions = []
+                rewards = []
+
+            if step is None:
                 step = 0
 
             rewards_per_episode = []
-            rewards = []
-
-            summary_writer = tf.summary.FileWriter('log')
-            # TODO: check if add_graph is necessary.
-            summary_writer.add_graph(self._graph, step)
 
             done = True
-            episode = 1
+            episode = 0
             while step < max_num_of_steps:
                 if done:
+                    if (
+                        max_num_of_episodes is not None
+                        and episode >= max_num_of_episodes
+                    ):
+                        break
+
 #                    initial_observation = self._env.reset()
                     initial_observation = self.emulator.new_game()
                     state = self.preprocess_observation(initial_observation)
+                    phi = np.zeros((1, s, s, c), dtype=np.float32)
                     done = False
                     episode += 1
                     rewards_per_episode.append(0)
 
-                n_steps = self._config['final_exploration_frame'] 
-                min_epsilon = self._config['final_exploration']
-                if step < n_steps:
+                if (train and (step < n_steps)):
                     epsilon = 1 - (1 - min_epsilon) / n_steps * step 
                 else:
                     epsilon = min_epsilon
 
-                action = self._get_action(epsilon)
+                phi[0,:,:,:3] = phi[0,:,:,1:]
+                phi[0,:,:,3] = np.array(state, dtype=np.float32) / IMG_SCALE
+                action = self._get_action(epsilon, phi)
 #                observation, reward, done, _ = self._env.step(action)
                 observation, reward, done = self.emulator.next(action)
-                rewards.append(reward)
-                rewards_per_episode[-1] += reward
                 step += 1
                 state = self.preprocess_observation(observation)
                 self._replay_memory.store(state, action, reward, int(done))
 
+                rewards_per_episode[-1] += reward
+
                 # TODO: Wait until when?
-                if (
-                    self._replay_memory.get_size()
-                    > self._config['replay_start_size']
-                ):
+                if train:
+                    if(
+                        self._replay_memory.get_size()
+                        > self._config['replay_start_size']
+                    ):
+                        continue
+
                     loss, loss_summary_str = self._optimize_Q()
                     summary_writer.add_summary(loss_summary_str, step)
 
-                    if step % 1000 == 0:
-                        print('step: {}, loss: {:g}, ave. reward: {:g}'
-                              .format(step, loss, np.mean(rewards_per_episode)))
-#                        self.play_game()
-                    if step % 10000 == 0 or step == max_num_of_steps:
+                    if (step % 1000 == 0):
+                        print(
+                            'step: {}, loss: {:g}, ave. reward: {:g}'
+                            .format(
+                                step, loss, np.mean(rewards_per_episode)
+                            )
+                        )
+                    if (step % 10000 == 0 or step == max_num_of_steps):
                         save_path = saver.save(
                             self._tf_session,
                             'checkpoints/{}'.format(self.game_name),
                             global_step=step,
                         )
+                        print('checkpoint saved at {}'.format(save_path))
                         self.play_game()
-                    if step % 50000 == 0:
+                    if (step % 50000 == 0):
                         rewards_per_episode = rewards_per_episode[-1:]
+                else:
+                    actions.append(action)
+                    rewards.append(reward)
+                    play_images.append(Image.fromarray(observation))
 
-            assert(step >= max_num_of_steps)
-#            self.play_game()
-            summary_writer.close()
-            return save_path
-
-
-    def play_game(
-        self,
-        save_path=None,
-        render=False,
-        num_of_episodes=1,
-    ):
-        play_images = []
-        actions = []
-        rewards = []
-        if self._tf_session is not None:
-#            initial_observation = self._env.reset()
-            initial_observation = self.emulator.new_game()
-            state = self.preprocess_observation(initial_observation)
-#            stacked_states = np.array(
-#                np.stack([state] * 4, axis=2),
-#                dtype=np.float32,
-#            )[np.newaxis,:,:,:]
-            done = False
-            #while not done:
-            while num_of_episodes > 0:
-                action = self._get_action(
-                    0.1,
-#                    np.array(stacked_states, dtype=np.float32) / IMG_SCALE,
-                    self._replay_memory.get_stacked_states()
+            if (step >= max_num_of_steps):
+                print(
+                    'Finished: reached the maximum number of steps {}.'
+                    .format(max_num_of_steps)
                 )
-                actions.append(action)
-#                observation, reward, done, _ = self._env.step(action)
-                observation, reward, done = self.emulator.next(action)
-                state = self.preprocess_observation(observation)
-                self._replay_memory.store(state, action, reward, int(done))
-                rewards.append(reward)
-#                print('action {}:, reward: {}, done: {}.'
-#                      .format(action, reward, done))
-#                if render:
-#                    self._env.render()
-#                stacked_states[:,:,:,:-1] = stacked_states[:,:,:,1:]
-#                stacked_states[:,:,:,-1] = state[np.newaxis,:,:]
-                play_images.append(Image.fromarray(observation))
-                if done:
-#                    self._env.reset()
-                    self.emulator.new_game()
-                    num_of_episodes -= 1
-                    
-        play_images[0].save(
-            'play.gif',
-            save_all=True,
-            append_images=play_images[1:],
-        )
 
-        return (actions, rewards)
-    
-    def _get_action(self, epsilon):
+            if train:
+                summary_writer.close()
+            else:
+                play_images[0].save(
+                    'play.gif',
+                    save_all=True,
+                    append_images=play_images[1:],
+                )
+                return (actions, rewards)
+
+    def _get_action(self, epsilon, phi):
         if (random.random() < epsilon):
 #            return self._env.action_space.sample()
             return np.random.randint(0, self.get_num_of_actions())
         else:
-            return self._get_action_from_Q()
+            return self._get_action_from_Q(phi)
 
-    def _get_action_from_Q(self):
-        stacked_states = self._replay_memory.get_stacked_states()
-        Qs = self._get_Q_values(stacked_states)
+    def _get_action_from_Q(self, phi):
+        #stacked_states = self._replay_memory.get_stacked_states()
+        Qs = self._get_Q_values(phi)
         # TODO: Tiebreaking
         return np.argmax(Qs)
 
