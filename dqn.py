@@ -1,5 +1,6 @@
 import random
 import os
+import time
 
 import numpy as np
 
@@ -52,7 +53,7 @@ DQN_configuration = {
     'validation_size': 50,
 }
 
-IMG_SCALE = 255.0
+#IMG_SCALE = 255.0
 
 class ReplayMemory:
     def __init__(self, config):
@@ -177,7 +178,7 @@ class ReplayMemory:
             buf_states[i] = np.transpose(
                 self.states[(j - h + 1 + offset):(j + 1 + offset),:,:],
                 (1, 2, 0),
-            ) / IMG_SCALE
+            ) #/ IMG_SCALE
             
 
 class AtariDQNAgent:
@@ -210,6 +211,9 @@ class AtariDQNAgent:
         self._Q_network_layers = None
         self._train_op_input = {}
         self._loss_op = None
+        self._validation_op_input = {}
+        self._average_Q_op = None
+        self._ave_reward = None
         self._tf_summary = {}
         self._tf_session = None
 
@@ -323,6 +327,27 @@ class AtariDQNAgent:
             ).minimize(self._loss_op)
             self._tf_summary['loss'] = tf.summary.scalar('loss', self._loss_op)
 
+        with tf.variable_scope('validation_op'):
+            self._validation_op_input = {
+                'validation_states': self._Q_network_layers[0]
+            }
+            Q_output = self._Q_network_layers[-1]
+            self._average_Q_op = tf.reduce_mean(
+                tf.reduce_max(Q_output, axis=1)
+            )
+            self._tf_summary['Q'] = tf.summary.scalar('Q', self._average_Q_op)
+
+
+            self._ave_reward = tf.Variable(
+                0.0,
+                name='ave_reward',
+            )
+
+            self._tf_summary['reward_per_episode'] = tf.summary.scalar(
+                'reward_per_episode',
+                self._ave_reward
+            )
+
     def _get_filter_and_bias(self, W_shape, b_shape):
         W = tf.get_variable(
             'W',
@@ -392,7 +417,11 @@ class AtariDQNAgent:
 
         with self._graph.as_default():
             if train:
-                summary_writer = tf.summary.FileWriter('log')
+                log_name = ('{:02}{:02}{:02}{:02}{:02}'
+                            .format(*time.localtime()[1:6]))
+                summary_writer = tf.summary.FileWriter(
+                    'log/{}'.format(log_name)
+                )
                 # TODO: check if add_graph is necessary.
                 summary_writer.add_graph(self._graph, step)
 
@@ -436,7 +465,7 @@ class AtariDQNAgent:
                     epsilon = min_epsilon
 
                 phi[0,:,:,:3] = phi[0,:,:,1:]
-                phi[0,:,:,3] = np.array(state, dtype=np.float32) / IMG_SCALE
+                phi[0,:,:,3] = np.array(state, dtype=np.float32) #/ IMG_SCALE
                 action = self._get_action(epsilon, phi)
 #                observation, reward, done, _ = self._env.step(action)
                 observation, reward, done = self.emulator.next(action)
@@ -468,13 +497,25 @@ class AtariDQNAgent:
                     losses[-1] += loss
 
                     if (step % 1000 == 0):
-                        Qs_validation = np.amax(
-                            self._get_Q_values(self._validation_states),
-                            axis=1,
-                        )
                         ave_loss = np.mean(loss)
+
+                        ave_Q, Q_summary_str = self._tf_session.run(
+                            [self._average_Q_op, self._tf_summary['Q']],
+                            feed_dict={
+                                self._Q_network_layers[0]:
+                                    self._validation_states
+                            },
+                        )
+                        summary_writer.add_summary(Q_summary_str, step)
+
                         ave_reward = np.mean(rewards_per_episode)
-                        ave_Q = np.mean(Qs_validation)
+
+                        _, reward_summary_str = self._tf_session.run(
+                            [tf.assign(self._ave_reward, ave_reward),
+                             self._tf_summary['reward_per_episode']]
+                        )
+                        summary_writer.add_summary(reward_summary_str, step)
+
                         print(
                             'step: {}, ave. loss: {:g}, '
                             'ave. reward: {:g}, ave. Q: {:g}'
@@ -542,7 +583,6 @@ class AtariDQNAgent:
         return self._tf_session.run(
             self._Q_network_layers[-1],
             feed_dict={self._Q_network_layers[0]: states},
-            #feed_dict={self._Q_network_layers[0]: states},
         )
 
     def _optimize_Q(self):
