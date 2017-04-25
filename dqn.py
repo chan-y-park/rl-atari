@@ -552,6 +552,7 @@ class AtariDQNAgent:
                 step = 0
 
             rewards_per_episode = []
+            losses = []
 
             done = True
             episode = 0
@@ -570,6 +571,7 @@ class AtariDQNAgent:
                     done = False
                     episode += 1
                     rewards_per_episode.append(0)
+                    losses.append(0)
 
                 if (train and (step < n_steps)):
                     epsilon = 1 - (1 - min_epsilon) / n_steps * step 
@@ -591,18 +593,21 @@ class AtariDQNAgent:
                 if train:
                     if(
                         self._replay_memory.get_size()
-                        > self._config['replay_start_size']
+                        < self._config['replay_start_size']
                     ):
                         continue
 
                     loss, loss_summary_str = self._optimize_Q()
                     summary_writer.add_summary(loss_summary_str, step)
+                    losses[-1] += loss
 
                     if (step % 1000 == 0):
                         print(
-                            'step: {}, loss: {:g}, ave. reward: {:g}'
+                            'step: {}, ave. loss: {:g}, ave. reward: {:g}'
                             .format(
-                                step, loss, np.mean(rewards_per_episode)
+                                step,
+                                np.mean(loss),
+                                np.mean(rewards_per_episode),
                             )
                         )
                     if (step % 10000 == 0 or step == max_num_of_steps):
@@ -612,9 +617,9 @@ class AtariDQNAgent:
                             global_step=step,
                         )
                         print('checkpoint saved at {}'.format(save_path))
-                        self.play_game()
                     if (step % 50000 == 0):
                         rewards_per_episode = rewards_per_episode[-1:]
+                        losses = losses[-1:]
                 else:
                     actions.append(action)
                     rewards.append(reward)
