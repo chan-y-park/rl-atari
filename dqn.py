@@ -12,6 +12,7 @@ import tensorflow as tf
 from PIL import Image
 
 # TODO
+# * check thresholding in the original code.
 # * weight histogram
 # * rescaling rewards.
 # * what to do with the stacking of states at the beginning of an episode.
@@ -53,8 +54,6 @@ DQN_configuration = {
     #'validation_size': 50,
 }
 
-#IMG_SCALE = 255.0
-
 class ReplayMemory:
     def __init__(self, config):
         self.size = config['replay_memory_size']
@@ -86,34 +85,6 @@ class ReplayMemory:
             self.full = True
             self.index = 0
 
-#    def get_stacked_states(self):
-#        h = self.agent_history_length
-#        i_start = self.index - h 
-#        if i_start < 0:
-#            if not self.full:
-##                raise RuntimeError(
-##                    'Need at least 4 states in the replay memory.'
-##                )
-#                indices = (
-#                    [0] * abs(i_start) + [i for i in range(0, self.index)]
-#                )
-#            else:
-#                i_start += self.size
-#                indices = [
-#                    i  % self.size
-#                    for i in range(i_start, i_start + h)
-#                ]
-#        else:
-#            indices = [i for i in range(i_start, i_start + h)
-#####
-#        print(indices)
-#####
-#        stacked_states = np.array(
-#            self.states[indices].transpose(1, 2, 0)[np.newaxis,:,:,:],
-#            dtype=np.float32,
-#        ) / IMG_SCALE
-#        return stacked_states
-
     def get_size(self):
         if self.full:
             current_size = self.size
@@ -138,31 +109,11 @@ class ReplayMemory:
         return samples
 
     def sample_minibatch(self):
-#        current_size = self.get_size()
-#        if current_size < self.minibatch_size:
-#            raise RuntimeError(
-#                'Number of states {} less than minibatch size {}'
-#                .format(current_size, self.minibatch_size)
-#            )
-#        samples = np.random.randint(
-#            low=(self.agent_history_length - 1),
-#            # XXX The following cannot sample self.states[self.size]
-#            # even when the next state is available as self.states[0].
-#            high=(current_size - 1),
-#            size=self.minibatch_size,
-#        )
         samples = self.get_samples(self.minibatch_size)
         h = self.agent_history_length       
         for i in range(self.minibatch_size):
             j = samples[i]
-#            self._minibatch['states'][i] = np.transpose(
-#                self.states[(j - h + 1):(j + 1),:,:],
-#                (1, 2, 0),
-#            ) / IMG_SCALE
-#            self._minibatch['next_states'][i] = np.transpose(
-#                self.states[(j - h + 2):(j + 2),:,:],
-#                (1, 2, 0),
-#            ) / IMG_SCALE
+
         self.fill_states(samples, self._minibatch['states'])
         self.fill_states(samples, self._minibatch['next_states'], offset=1)
         self._minibatch['actions'] = self.actions[samples]
@@ -178,7 +129,7 @@ class ReplayMemory:
             buf_states[i] = np.transpose(
                 self.states[(j - h + 1 + offset):(j + 1 + offset),:,:],
                 (1, 2, 0),
-            ) #/ IMG_SCALE
+            )
             
 
 class AtariDQNAgent:
@@ -195,8 +146,8 @@ class AtariDQNAgent:
 
         self._config = DQN_configuration
         self._random_seed = None
-#        self._env = gym.make(game_name)
-        self.emulator = Emulator()
+        self._env = gym.make(game_name)
+#        self.emulator = Emulator()
         # XXX: Should we do skipping and stacking at the same time?
         # TODO: Remove the following hack
 #        self._env.env.__init__(
@@ -370,8 +321,8 @@ class AtariDQNAgent:
         )
 
     def get_num_of_actions(self):
-        #return self._env.action_space.n
-        return len(self.emulator.legal_actions)
+        return self._env.action_space.n
+        #return len(self.emulator.legal_actions)
 
     def preprocess_observation(
         self,
@@ -453,8 +404,8 @@ class AtariDQNAgent:
                     ):
                         break
 
-#                    initial_observation = self._env.reset()
-                    initial_observation = self.emulator.new_game()
+                    initial_observation = self._env.reset()
+#                    initial_observation = self.emulator.new_game()
                     state = self.preprocess_observation(initial_observation)
                     phi = np.zeros((1, s, s, c), dtype=np.float32)
                     done = False
@@ -471,10 +422,10 @@ class AtariDQNAgent:
                     epsilon = min_epsilon
 
                 phi[0,:,:,:3] = phi[0,:,:,1:]
-                phi[0,:,:,3] = np.array(state, dtype=np.float32) #/ IMG_SCALE
+                phi[0,:,:,3] = np.array(state, dtype=np.float32)
                 action = self._get_action(epsilon, phi)
-#                observation, reward, done, _ = self._env.step(action)
-                observation, reward, done = self.emulator.next(action)
+                observation, reward, done, _ = self._env.step(action)
+#                observation, reward, done = self.emulator.next(action)
                 step += 1
                 state = self.preprocess_observation(observation)
                 self._replay_memory.store(state, action, reward, int(done))
@@ -571,8 +522,8 @@ class AtariDQNAgent:
 
     def _get_action(self, epsilon, phi):
         if (random.random() < epsilon):
-#            return self._env.action_space.sample()
-            return np.random.randint(0, self.get_num_of_actions())
+            return self._env.action_space.sample()
+#            return np.random.randint(0, self.get_num_of_actions())
         else:
             return self._get_action_from_Q(phi)
 
