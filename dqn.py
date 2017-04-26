@@ -12,7 +12,7 @@ import tensorflow as tf
 from PIL import Image
 
 # TODO
-# * implement ave. Q measurement, plotting measurements.
+# * weight histogram
 # * rescaling rewards.
 # * what to do with the stacking of states at the beginning of an episode.
 # * check if render() works fine with python/ipython cli.
@@ -38,19 +38,19 @@ DQN_configuration = {
     'discount_factor': 0.95,
     'action_repeat': 4,
     'update_frequency': 4,
-#    'learning_rate': 0.00025,
-    'learning_rate': 0.0002,
+    'learning_rate': 0.00025,
+#    'learning_rate': 0.0002,
     'rms_prop_decay': 0.95,
     'gradient_momentum': 0.0,
     'min_squared_gradient': 0.01,
     'initial_exploration': 1,
     'final_exploration': 0.1,
     'final_exploration_frame': 10 ** 6,
-    #'replay_start_size': 5 * (10 ** 4),
-    'replay_start_size': (10 ** 2),
+    'replay_start_size': 5 * (10 ** 4),
+    #'replay_start_size': (10 ** 2),
     'no-op_max': 30,
-    #'validation_size': 500,
-    'validation_size': 50,
+    'validation_size': 500,
+    #'validation_size': 50,
 }
 
 #IMG_SCALE = 255.0
@@ -403,10 +403,12 @@ class AtariDQNAgent:
         train=True,
         save_path=None,
         step=None,
+        log_name=None,
     ):
 
         s = self._config['Q_network_input_size']
         c = self._config['agent_history_length']
+        rss = self._config['replay_start_size']
         n_steps = self._config['final_exploration_frame'] 
         min_epsilon = self._config['final_exploration']
         stats = {
@@ -417,8 +419,9 @@ class AtariDQNAgent:
 
         with self._graph.as_default():
             if train:
-                log_name = ('{:02}{:02}{:02}{:02}{:02}'
-                            .format(*time.localtime()[1:6]))
+                if log_name is None:
+                    log_name = ('{:02}{:02}{:02}{:02}{:02}'
+                                .format(*time.localtime()[1:6]))
                 summary_writer = tf.summary.FileWriter(
                     'log/{}'.format(log_name)
                 )
@@ -459,8 +462,11 @@ class AtariDQNAgent:
                     rewards_per_episode.append(0)
                     losses.append(0)
 
-                if (train and (step < n_steps)):
-                    epsilon = 1 - (1 - min_epsilon) / n_steps * step 
+                if train:
+                    if step < rss:
+                        epsilon = 1
+                    elif (step < n_steps):
+                        epsilon = 1 - (1 - min_epsilon) / n_steps * step 
                 else:
                     epsilon = min_epsilon
 
@@ -477,7 +483,6 @@ class AtariDQNAgent:
 
                 # TODO: Wait until when?
                 if train:
-                    rss = self._config['replay_start_size']
                     if (self._replay_memory.get_size() < rss):
                         continue
 
@@ -616,6 +621,8 @@ class AtariDQNAgent:
 
 # XXX APIs for debugging
     def save_weights(self, path='weights_npy/'):
+        if not os.path.exists(path):
+            os.makedirs(path)
         import json
         npy = {}
         for layer_name in ('conv1', 'conv2', 'fc1', 'output'):
