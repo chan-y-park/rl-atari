@@ -321,9 +321,8 @@ class AtariDQNAgent:
         )
 
     def get_num_of_actions(self):
-#        return self._env.action_space.n
+        return self._env.action_space.n
 #        return len(self.emulator.legal_actions)
-        return 4
 
     def preprocess_observation(
         self,
@@ -414,13 +413,12 @@ class AtariDQNAgent:
                     rewards_per_episode.append(0)
                     losses.append(0)
 
+                epsilon = min_epsilon
                 if train:
                     if step < rss:
                         epsilon = 1
                     elif (step < n_steps):
                         epsilon = 1 - (1 - min_epsilon) / n_steps * step 
-                else:
-                    epsilon = min_epsilon
 
                 phi[0,:,:,:3] = phi[0,:,:,1:]
                 phi[0,:,:,3] = np.array(state, dtype=np.float32)
