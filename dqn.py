@@ -322,7 +322,8 @@ class AtariDQNAgent:
 
     def get_num_of_actions(self):
 #        return self._env.action_space.n
-        return len(self.emulator.legal_actions)
+#        return len(self.emulator.legal_actions)
+        return 4
 
     def preprocess_observation(
         self,
