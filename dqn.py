@@ -321,8 +321,8 @@ class AtariDQNAgent:
         )
 
     def get_num_of_actions(self):
-        return self._env.action_space.n
-        #return len(self.emulator.legal_actions)
+#        return self._env.action_space.n
+        return len(self.emulator.legal_actions)
 
     def preprocess_observation(
         self,
@@ -522,8 +522,8 @@ class AtariDQNAgent:
 
     def _get_action(self, epsilon, phi):
         if (random.random() < epsilon):
-            return self._env.action_space.sample()
-#            return np.random.randint(0, self.get_num_of_actions())
+#            return self._env.action_space.sample()
+            return np.random.randint(0, self.get_num_of_actions())
         else:
             return self._get_action_from_Q(phi)
 
