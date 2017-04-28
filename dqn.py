@@ -39,7 +39,7 @@ DQN_configuration = {
 
 
 class ReplayMemory:
-    def __init__(self, config):
+    def __init__(self, config, np_random):
         self.size = config['replay_memory_size']
         self.minibatch_size = m = config['minibatch_size']
         self.agent_history_length = h = config['agent_history_length']
@@ -51,6 +51,7 @@ class ReplayMemory:
         self.actions = np.zeros((self.size), dtype=np.uint8)
         self.rewards = np.zeros((self.size), dtype=np.float32)
         self.terminals = np.zeros((self.size), dtype=np.uint8)
+        self._np_random = np_random
         self._minibatch = {
             'states': np.zeros((m, s, s, h), dtype=np.float32),
             'actions': np.zeros(m, dtype=np.uint8),
@@ -129,9 +130,21 @@ class AtariDQNAgent:
             os.makedirs(checkpoints_dir)
 
         self._config = DQN_configuration
-        self._random_seed = random_seed
         self._env = gym.make(game_name)
-        self._replay_memory = ReplayMemory(config=self._config)
+
+        self._random_seed = random_seed
+        # Seeding Numpy.
+        self._np_random = np.random.RandomState(self._random_seed)
+        if self._random_seed is not None:
+            # Seeding Gym Atari environment.
+            self._env.env._seed(self._random_seed)
+            # Seeding Tensorflow.
+            tf.set_random_seed(self._random_seed)
+
+        self._replay_memory = ReplayMemory(
+            config=self._config,
+            np_random=self._np_random,
+        )
 
         self._validation_states = None
         self._Q_network_layers = None
@@ -142,14 +155,7 @@ class AtariDQNAgent:
         self._ave_reward = None
         self._tf_summary = {}
         self._tf_session = None
-
-        # Seeding Numpy.
-        self._np_random = np.random.RandomState(self._random_seed)
-        if self._random_seed is not None:
-            # Seeding Gym Atari environment.
-            self._env.env._seed(self._random_seed)
-            # Seeding Tensorflow.
-            tf.set_random_seed(self._random_seed)
+       
         self._graph = tf.Graph()
         with self._graph.as_default():
             self._build_graph()
