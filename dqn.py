@@ -35,6 +35,7 @@ DQN_configuration = {
     'replay_start_size': 5 * (10 ** 4),
     'no-op_max': 30,
     'validation_size': 500,
+    'evaluation_exploration': 0.05,
 }
 
 
@@ -384,12 +385,15 @@ class AtariDQNAgent:
                     rewards_per_episode.append(0)
                     losses.append(0)
 
-                epsilon = min_epsilon
                 if train:
                     if step < rss:
                         epsilon = 1
                     elif (step < n_steps):
                         epsilon = 1 - (1 - min_epsilon) / n_steps * step
+                    else:
+                        epsilon = min_epsilon
+                else:
+                    epsilon = self._config['evaluation_exploration'] 
 
                 phi[0,:,:,:3] = phi[0,:,:,1:]
                 phi[0,:,:,3] = np.array(state, dtype=np.float32)
