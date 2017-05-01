@@ -651,54 +651,54 @@ def plot_stats(stats):
 
 
 #import atari_py.ALEInterface as ALEInterface
-#from ale_python_interface import ALEInterface
-#
-#def _as_bytes(s):
-#    if hasattr(s, 'encode'):
-#        return s.encode('utf8')
-#    return s
-#
-#
-#class Emulator:
-#    def __init__(self):
-#        self.ale = ALEInterface()
-#        self.max_frames_per_episode = self.ale.getInt(
-#            _as_bytes("max_num_frames_per_episode")
-#        )
-#        self.ale.setInt(_as_bytes("random_seed"), 123)
-#        self.ale.setInt(_as_bytes("frame_skip"), 4)
-#        self.ale.loadROM(
-##            '/home/chan/venv/lib/python3.6/site-packages/atari_py/atari_roms/'
-##            'breakout.bin'
-#            _as_bytes(
-#                '/home/chan/workspace/DQN_tensorflow-master/roms/'
-#                'breakout.bin'
-#            )
-#        )
-#        self.legal_actions = self.ale.getMinimalActionSet()
-#        self.action_map = dict()
-#        self.screen_width, self.screen_height = self.ale.getScreenDims()
-#
-#    def get_image(self):
-#        numpy_surface = np.zeros(
-#            self.screen_height * self.screen_width * 3,
-#            dtype=np.uint8,
-#        )
-#        self.ale.getScreenRGB(numpy_surface)
-#        image = np.reshape(
-#            numpy_surface,
-#            (self.screen_height, self.screen_width, 3),
-#        )
-#        return image
-#
-#    def new_game(self):
-#        self.ale.reset_game()
-#        return self.get_image()
-#
-#    def next(self, action_indx):
-#        reward = self.ale.act(self.legal_actions[action_indx])    
-#        nextstate = self.get_image()
-#        return nextstate, reward, self.ale.game_over()
+from ale_python_interface import ALEInterface
+
+def _as_bytes(s):
+    if hasattr(s, 'encode'):
+        return s.encode('utf8')
+    return s
+
+
+class Emulator:
+    def __init__(self):
+        self.ale = ALEInterface()
+        self.max_frames_per_episode = self.ale.getInt(
+            _as_bytes("max_num_frames_per_episode")
+        )
+        self.ale.setInt(_as_bytes("random_seed"), 123)
+        self.ale.setInt(_as_bytes("frame_skip"), 4)
+        self.ale.loadROM(
+#            '/home/chan/venv/lib/python3.6/site-packages/atari_py/atari_roms/'
+#            'breakout.bin'
+            _as_bytes(
+                '/home/chan/workspace/DQN_tensorflow-master/roms/'
+                'breakout.bin'
+            )
+        )
+        self.legal_actions = self.ale.getMinimalActionSet()
+        self.action_map = dict()
+        self.screen_width, self.screen_height = self.ale.getScreenDims()
+
+    def get_image(self):
+        numpy_surface = np.zeros(
+            self.screen_height * self.screen_width * 3,
+            dtype=np.uint8,
+        )
+        self.ale.getScreenRGB(numpy_surface)
+        image = np.reshape(
+            numpy_surface,
+            (self.screen_height, self.screen_width, 3),
+        )
+        return image
+
+    def new_game(self):
+        self.ale.reset_game()
+        return self.get_image()
+
+    def next(self, action_indx):
+        reward = self.ale.act(self.legal_actions[action_indx])    
+        nextstate = self.get_image()
+        return nextstate, reward, self.ale.game_over()
 
 
 # XXX
