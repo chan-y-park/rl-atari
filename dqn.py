@@ -146,8 +146,8 @@ class AtariDQNAgent:
 
         self._config = DQN_configuration
         self._random_seed = None
-        self._env = gym.make(game_name)
-#        self.emulator = Emulator()
+#        self._env = gym.make(game_name)
+        self.emulator = Emulator()
         # XXX: Should we do skipping and stacking at the same time?
         # TODO: Remove the following hack
 #        self._env.env.__init__(
@@ -321,8 +321,8 @@ class AtariDQNAgent:
         )
 
     def get_num_of_actions(self):
-        return self._env.action_space.n
-#        return len(self.emulator.legal_actions)
+#        return self._env.action_space.n
+        return len(self.emulator.legal_actions)
 
     def preprocess_observation(
         self,
@@ -404,8 +404,8 @@ class AtariDQNAgent:
                     ):
                         break
 
-                    initial_observation = self._env.reset()
-#                    initial_observation = self.emulator.new_game()
+#                    initial_observation = self._env.reset()
+                    initial_observation = self.emulator.new_game()
                     state = self.preprocess_observation(initial_observation)
                     phi = np.zeros((1, s, s, c), dtype=np.float32)
                     done = False
@@ -423,8 +423,8 @@ class AtariDQNAgent:
                 phi[0,:,:,:3] = phi[0,:,:,1:]
                 phi[0,:,:,3] = np.array(state, dtype=np.float32)
                 action = self._get_action(epsilon, phi)
-                observation, reward, done, _ = self._env.step(action)
-#                observation, reward, done = self.emulator.next(action)
+ #               observation, reward, done, _ = self._env.step(action)
+                observation, reward, done = self.emulator.next(action)
                 step += 1
                 state = self.preprocess_observation(observation)
                 self._replay_memory.store(state, action, reward, int(done))
@@ -521,7 +521,7 @@ class AtariDQNAgent:
 
     def _get_action(self, epsilon, phi):
         if (random.random() < epsilon):
-#            return self._env.action_space.sample()
+ #           return self._env.action_space.sample()
             return np.random.randint(0, self.get_num_of_actions())
         else:
             return self._get_action_from_Q(phi)
