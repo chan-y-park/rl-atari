@@ -352,14 +352,15 @@ class AtariDQNAgent:
                     logdir='log/{}'.format(log_name),
                     graph=self._graph
                 )
-                saver = tf.train.Saver()
-                if save_path is not None:
-                    saver.restore(self._tf_session, save_path)
-                    step = self._get_step_from_checkpoint(save_path)
             else:
                 play_images = []
                 actions = []
                 rewards = []
+
+            saver = tf.train.Saver()
+            if save_path is not None:
+                saver.restore(self._tf_session, save_path)
+                step = self._get_step_from_checkpoint(save_path)
 
             if step is None:
                 step = 0
@@ -369,13 +370,19 @@ class AtariDQNAgent:
 
             done = True
             episode = 0
-            while step < max_num_of_steps:
+#            while step < max_num_of_steps:
+#                if done:
+#                    if (
+#                        max_num_of_episodes is not None
+#                        and episode >= max_num_of_episodes
+#                    ):
+#                        break
+            while (
+                step < max_num_of_steps
+                or (max_num_of_episodes is not None
+                    and episode < max_num_of_episodes)
+            ):
                 if done:
-                    if (
-                        max_num_of_episodes is not None
-                        and episode >= max_num_of_episodes
-                    ):
-                        break
 
                     initial_observation = self._env.reset()
                     state = self.preprocess_observation(initial_observation)
@@ -393,7 +400,8 @@ class AtariDQNAgent:
                     else:
                         epsilon = min_epsilon
                 else:
-                    epsilon = self._config['evaluation_exploration'] 
+#                    epsilon = self._config['evaluation_exploration'] 
+                    epsilon = min_epsilon
 
                 phi[0,:,:,:3] = phi[0,:,:,1:]
                 phi[0,:,:,3] = np.array(state, dtype=np.float32)
@@ -474,7 +482,7 @@ class AtariDQNAgent:
                     rewards.append(reward)
                     play_images.append(Image.fromarray(observation))
 
-            if (step >= max_num_of_steps):
+            if (train and step >= max_num_of_steps):
                 print(
                     'Finished: reached the maximum number of steps {}.'
                     .format(max_num_of_steps)
