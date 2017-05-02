@@ -260,6 +260,7 @@ class AtariDQNAgent:
                 decay=self._config['rms_prop_decay'],
                 momentum=self._config['gradient_momentum'],
                 epsilon=self._config['min_squared_gradient'],
+                centered=True,
             ).minimize(self._loss_op)
             self._tf_summary['loss'] = tf.summary.scalar('loss', self._loss_op)
 
