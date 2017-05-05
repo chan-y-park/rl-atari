@@ -12,4 +12,5 @@ An implementation of the deep Q-network for Atari games of https://arxiv.org/abs
 Please read https://chan-y-park.github.io/blog/rl_atari.html for a detailed description of this project.
 
 ## Game Play
-![game play](https://chan-y-park.github.io/blog/figures/rl_atari/play.gif "game play")
+This is the animation of playing *Breakout* after 10 million weight updates.
+
