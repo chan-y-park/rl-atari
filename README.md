@@ -1,4 +1,4 @@
-# A simple deep Q-network
+# A simple deep Q-network for Atari game *Breakout*
 An implementation of the deep Q-network for Atari games of https://arxiv.org/abs/1312.5602.
 
 ## Requirements
