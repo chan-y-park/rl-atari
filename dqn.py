@@ -8,35 +8,7 @@ import tensorflow as tf
 
 from PIL import Image
 
-DQN_configuration = {
-    'Q_network': [
-        ('input', {}),
-        ('conv1', {'W_size': 8, 'stride': 4, 'in': 4, 'out': 16}),
-        ('conv2', {'W_size': 4, 'stride': 2, 'in': 16, 'out': 32}),
-        ('fc1', {'num_relus': 256}),
-        ('output', {}),
-    ],
-    'Q_network_input_size': 84,
-    'var_init_mean': 0.0,
-    'var_init_stddev': 0.01,
-    'minibatch_size': 32,
-    'replay_memory_size': 10 ** 6,
-    'agent_history_length': 4,
-    'discount_factor': 0.95,
-    'action_repeat': 4,
-    'update_frequency': 4,
-    'learning_rate': 0.00025,
-    'rms_prop_decay': 0.95,
-    'gradient_momentum': 0.0,
-    'min_squared_gradient': 0.01,
-    'initial_exploration': 1,
-    'final_exploration': 0.1,
-    'final_exploration_frame': 10 ** 6,
-    'replay_start_size': 5 * (10 ** 4),
-    'no-op_max': 30,
-    'validation_size': 500,
-    'evaluation_exploration': 0.05,
-}
+from configs import dqn_nature_configuration
 
 
 class ReplayMemory:
@@ -120,6 +92,7 @@ class AtariDQNAgent:
         self,
         game_name='Breakout-v0',
         random_seed=None,
+        config=dqn_nature_configuration,
     ):
         self.game_name = game_name
 
@@ -130,7 +103,7 @@ class AtariDQNAgent:
         if not os.path.exists(checkpoints_dir):
             os.makedirs(checkpoints_dir)
 
-        self._config = DQN_configuration
+        self._config = config
         self._env = gym.make(game_name)
 
         self._random_seed = random_seed
@@ -147,8 +120,8 @@ class AtariDQNAgent:
             np_random=self._np_random,
         )
 
+        self._target_Q_update_ops = None
         self._validation_states = None
-        self._Q_network_layers = None
         self._train_op_input = {}
         self._loss_op = None
         self._validation_op_input = {}
@@ -157,34 +130,44 @@ class AtariDQNAgent:
         self._tf_summary = {}
         self._tf_session = None
        
-        self._graph = tf.Graph()
-        with self._graph.as_default():
-            self._build_graph()
+        self._tf_graph = tf.Graph()
+        with self._tf_graph.as_default():
+            with tf.variable_scope('Q_network'):
+                self._build_Q_network()
+            if self._config['target_network_update_frequency'] is not None:
+                with tf.variable_scope('target_Q_network'):
+                    self._build_Q_network()
+
+            with tf.variable_scope('train_op'):
+                self._build_train_op()
+            with tf.variable_scope('validation_op'):
+                self._build_validation_op()
+            with tf.variable_scope('update'):
+                self._build_update_ops()
+
             self._tf_session = tf.Session()
             self._tf_session.run(tf.global_variables_initializer())
 
-    def _build_graph(self):
-        self._Q_network_layers = []
-        prev_layer = None
+    def _build_Q_network(self):
+        s = self._config['Q_network_input_size']
+        c = self._config['agent_history_length']
+
+        # The size of the minibatch can be either 32 when training
+        # or 1 when evaluating Q for a given state,
+        # therefore set to None.
+        prev_layer = tf.placeholder(
+            tf.float32,
+            shape=(None, s, s, c),
+            name='input',
+        )
         for layer_name, layer_conf in self._config['Q_network']:
             with tf.variable_scope(layer_name):
-                if 'input' in layer_name:
-                    s = self._config['Q_network_input_size']
-                    c = self._config['agent_history_length']
-
-                    # The size of the minibatch can be either 32 when training
-                    # or 1 when evaluating Q for a given state,
-                    # therefore set to None.
-                    new_layer = tf.placeholder(
-                        tf.float32,
-                        shape=(None, s, s, c),
-                        name='input_layer',
-                    )
-                elif 'conv' in layer_name:
-                    W_s = layer_conf['W_size']
+                if 'conv' in layer_name:
+                    W_s = layer_conf['filter_size']
                     s = layer_conf['stride']
-                    i = layer_conf['in']
-                    o = layer_conf['out']
+                    _, _, _, i = prev_layer.shape.as_list()
+#                    i = layer_conf['in']
+                    o = layer_conf['num_filters']
                     W, b = self._get_filter_and_bias(
                         W_shape=(W_s, W_s, i, o),
                         b_shape=o,
@@ -211,78 +194,94 @@ class AtariDQNAgent:
                             tf.matmul(conv_out_flattened, W), b
                         )
                     )
-                elif 'output' in layer_name:
-                    in_dim = prev_layer.shape.as_list()[-1]
-                    num_actions = self.get_num_of_actions()
-                    W, b = self._get_filter_and_bias(
-                        W_shape=(in_dim, num_actions),
-                        b_shape=(num_actions),
-                    )
-                    new_layer = tf.nn.bias_add(
-                        tf.matmul(prev_layer, W), b
-                    )
 
-                self._Q_network_layers.append(new_layer)
+
                 prev_layer = new_layer
 
-        with tf.variable_scope('train_op'):
+        in_dim = prev_layer.shape.as_list()[-1]
+        num_actions = self.get_num_of_actions()
+        W, b = self._get_filter_and_bias(
+            W_shape=(in_dim, num_actions),
+            b_shape=(num_actions),
+        )
+        new_layer = tf.nn.bias_add(
+            tf.matmul(prev_layer, W), b
+            name='output',
+        )
 
-            ys = tf.placeholder(
-                dtype=tf.float32,
-                shape=(self._config['minibatch_size']),
-                name='ys',
-            )
-            actions = tf.placeholder(
-                dtype=tf.uint8,
-                shape=(self._config['minibatch_size']),
-                name='actions',
-            )
-            Q_input = self._Q_network_layers[0]
+    def _build_train_op(self):
+        ys = tf.placeholder(
+            dtype=tf.float32,
+            shape=(self._config['minibatch_size']),
+            name='ys',
+        )
+        actions = tf.placeholder(
+            dtype=tf.uint8,
+            shape=(self._config['minibatch_size']),
+            name='actions',
+        )
+        Q_input = self._get_tf_op('Q_network/input')
 
-            self._train_op_input = {
-                'states': Q_input,
-                'actions': actions,
-                'ys': ys,
-            }
+        self._train_op_input = {
+            'states': Q_input,
+            'actions': actions,
+            'ys': ys,
+        }
 
-            Q_output = self._Q_network_layers[-1]
-            one_hot_actions = tf.one_hot(
-                actions,
-                self.get_num_of_actions(),
-            )
-            Qs_of_action = tf.reduce_sum(
-                tf.multiply(Q_output, one_hot_actions),
-                axis=1,
-            )
-            self._loss_op = tf.reduce_mean(tf.square(ys - Qs_of_action))
-            self._train_op = tf.train.RMSPropOptimizer(
-                learning_rate=self._config['learning_rate'],
-                decay=self._config['rms_prop_decay'],
-                momentum=self._config['gradient_momentum'],
-                epsilon=self._config['min_squared_gradient'],
-                centered=True,
-            ).minimize(self._loss_op)
-            self._tf_summary['loss'] = tf.summary.scalar('loss', self._loss_op)
+        Q_output = self._get_tf_op('Q_network/output')
+        one_hot_actions = tf.one_hot(
+            actions,
+            self.get_num_of_actions(),
+        )
+        Qs_of_action = tf.reduce_sum(
+            tf.multiply(Q_output, one_hot_actions),
+            axis=1,
+        )
+        self._loss_op = tf.reduce_mean(tf.square(ys - Qs_of_action))
+        self._train_op = tf.train.RMSPropOptimizer(
+            learning_rate=self._config['learning_rate'],
+            decay=self._config['rms_prop_decay'],
+            momentum=self._config['gradient_momentum'],
+            epsilon=self._config['min_squared_gradient'],
+            centered=True,
+        ).minimize(self._loss_op)
+        self._tf_summary['loss'] = tf.summary.scalar('loss', self._loss_op)
 
-        with tf.variable_scope('validation_op'):
-            self._validation_op_input = {
-                'validation_states': self._Q_network_layers[0]
-            }
-            Q_output = self._Q_network_layers[-1]
-            self._average_Q_op = tf.reduce_mean(
-                tf.reduce_max(Q_output, axis=1)
-            )
-            self._tf_summary['Q'] = tf.summary.scalar('Q', self._average_Q_op)
+    def _build_validation_op(self):
+        Q_input = self._get_tf_op('Q_network/input')
+        self._validation_op_input = {
+            'validation_states': Q_input
+        }
+        Q_output = self._get_tf_op('Q_network/output')
+        self._average_Q_op = tf.reduce_mean(
+            tf.reduce_max(Q_output, axis=1)
+        )
+        self._tf_summary['Q'] = tf.summary.scalar('Q', self._average_Q_op)
 
-            self._ave_reward = tf.Variable(
-                0.0,
-                name='ave_reward',
-            )
+        self._ave_reward = tf.Variable(
+            0.0,
+            name='ave_reward',
+        )
 
-            self._tf_summary['reward_per_episode'] = tf.summary.scalar(
-                'reward_per_episode',
-                self._ave_reward
-            )
+        self._tf_summary['reward_per_episode'] = tf.summary.scalar(
+            'reward_per_episode',
+            self._ave_reward
+        )
+
+    def _build_update_ops(self):
+        self._target_Q_update_ops = []
+        for layer_name, layer_conf in self._config['Q_network']:
+            for var_name in ['W', 'b']:
+                layer_var_name = layer_name + '/' + var_name
+                source_var = self._tf_graph.get_tensor_by_name(
+                    'Q_networks/' + layer_var_name + ':0'
+                )
+                target_var = self._tf_graph.get_tensor_by_name(
+                    'target_Q_networks/' + layer_var_name + ':0'
+                )
+                self._target_Q_update_ops.append(
+                    tf.assign(target_var, source_var, name=layer_var_name)
+                )
 
     def _get_filter_and_bias(self, W_shape, b_shape):
         W = tf.get_variable(
@@ -304,6 +303,12 @@ class AtariDQNAgent:
             stddev=self._config['var_init_stddev'],
             seed=self._random_seed,
         )
+
+    def _get_tf_op(self, name):
+        return self._tf_graph.get_operation_by_name('name')
+
+    def _get_tf_var(self, name):
+        return self._tf_graph.get_tensor_by_name('name')
 
     def get_num_of_actions(self):
         return self._env.action_space.n
@@ -338,13 +343,14 @@ class AtariDQNAgent:
         rss = self._config['replay_start_size']
         n_steps = self._config['final_exploration_frame']
         min_epsilon = self._config['final_exploration']
+        tnuf = self._config['target_network_update_frequency']
         stats = {
             'average_loss': [],
             'average_reward': [],
             'average_Q': [],
         }
 
-        with self._graph.as_default():
+        with self._tf_graph.as_default():
             saver = tf.train.Saver()
             if save_path is not None:
                 saver.restore(self._tf_session, save_path)
@@ -359,7 +365,7 @@ class AtariDQNAgent:
                                 .format(*time.localtime()[1:6]))
                 summary_writer = tf.summary.FileWriter(
                     logdir='log/{}'.format(log_name),
-                    graph=self._graph
+                    graph=self._tf_graph
                 )
             else:
                 play_images = []
@@ -426,14 +432,16 @@ class AtariDQNAgent:
                     summary_writer.add_summary(loss_summary_str, step)
                     losses[-1] += loss
 
+                    if (step % tnuf == 0):
+                        self._update_target_Q_network()
+
                     if (step % 1000 == 0):
                         ave_loss = np.mean(loss)
-
+                        Q_input = self._get_tf_op('Q_network/input')
                         ave_Q, Q_summary_str = self._tf_session.run(
                             [self._average_Q_op, self._tf_summary['Q']],
                             feed_dict={
-                                self._Q_network_layers[0]:
-                                    self._validation_states
+                                Q_input: self._validation_states
                             },
                         )
                         summary_writer.add_summary(Q_summary_str, step)
@@ -504,19 +512,27 @@ class AtariDQNAgent:
         # TODO: Tiebreaking
         return np.argmax(Qs)
 
-    def _get_Q_values(self, states):
+    def _get_Q_values(self, states, from_target_Q=False):
         assert(states.ndim == 4)
         assert(states.dtype == np.float32)
+        name = 'Q_network'
+        if from_target_Q:
+            name = 'target_' + name
+        Q_input = self._get_tf_op(name + '/input')
+        Q_output = self._get_tf_op(name + '/output')
         return self._tf_session.run(
-            self._Q_network_layers[-1],
-            feed_dict={self._Q_network_layers[0]: states},
+            Q_output,
+            feed_dict={Q_input: states},
         )
 
     def _optimize_Q(self):
         gamma = self._config['discount_factor']
         minibatch = self._replay_memory.sample_minibatch()
         mask = (1 - minibatch['terminals'])
-        Qs_next = self._get_Q_values(minibatch['next_states'])
+        Qs_next = self._get_Q_values(
+            minibatch['next_states'],
+            from_target_Q=True,
+        )
         ys = minibatch['rewards'] + gamma * (
             np.amax(
                 Qs_next * mask[:, np.newaxis],
@@ -534,6 +550,9 @@ class AtariDQNAgent:
         )
 
         return (loss, loss_summary_str)
+
+    def _update_target_Q_network(self):
+        self._tf_session.run(self._target_Q_update_ops)
 
     def _get_step_from_checkpoint(self, save_path):
         return int(save_path.split('-')[-1])
