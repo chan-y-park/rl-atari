@@ -121,12 +121,21 @@ class AtariDQNAgent:
         )
 
         self._target_Q_update_ops = None
+#
+#        self._train_op_input = {}
+#        self._validation_op_input = {}
+#        self._loss_op = None
+#        self._average_Q_op = None
+#        self._ave_reward = None
+
+#        # A dict of TF ops to run. A key is the name of an op.
+#        self._tf_op = {}
+        # A dict of TF tensors to use.
+        # A key is the name of a tensor without the output index
+        # unless necessary.
+        self._tf_t = {}
+
         self._validation_states = None
-        self._train_op_input = {}
-        self._loss_op = None
-        self._validation_op_input = {}
-        self._average_Q_op = None
-        self._ave_reward = None
         self._tf_summary = {}
         self._tf_session = None
        
@@ -138,12 +147,14 @@ class AtariDQNAgent:
                 with tf.variable_scope('target_Q_network'):
                     self._build_Q_network()
 
-            with tf.variable_scope('train_op'):
-                self._build_train_op()
-            with tf.variable_scope('validation_op'):
-                self._build_validation_op()
+            with tf.variable_scope('train'):
+                self._build_train_ops()
+            with tf.variable_scope('validation'):
+                self._build_validation_ops()
             with tf.variable_scope('update'):
                 self._build_update_ops()
+            with tf.variable_scope('summary'):
+                self._build_summary_ops()
 
             self._tf_session = tf.Session()
             self._tf_session.run(tf.global_variables_initializer())
@@ -205,11 +216,11 @@ class AtariDQNAgent:
             b_shape=(num_actions),
         )
         new_layer = tf.nn.bias_add(
-            tf.matmul(prev_layer, W), b
+            tf.matmul(prev_layer, W), b,
             name='output',
         )
 
-    def _build_train_op(self):
+    def _build_train_ops(self):
         ys = tf.placeholder(
             dtype=tf.float32,
             shape=(self._config['minibatch_size']),
@@ -220,15 +231,15 @@ class AtariDQNAgent:
             shape=(self._config['minibatch_size']),
             name='actions',
         )
-        Q_input = self._get_tf_op('Q_network/input')
+#        Q_input = self._get_tf_t('Q_network/input:0')
 
-        self._train_op_input = {
-            'states': Q_input,
-            'actions': actions,
-            'ys': ys,
-        }
+#        self._train_op_input = {
+#            'states': Q_input,
+#            'actions': actions,
+#            'ys': ys,
+#        }
 
-        Q_output = self._get_tf_op('Q_network/output')
+        Q_output = self._get_tf_t('Q_network/output:0')
         one_hot_actions = tf.one_hot(
             actions,
             self.get_num_of_actions(),
@@ -237,35 +248,41 @@ class AtariDQNAgent:
             tf.multiply(Q_output, one_hot_actions),
             axis=1,
         )
-        self._loss_op = tf.reduce_mean(tf.square(ys - Qs_of_action))
-        self._train_op = tf.train.RMSPropOptimizer(
+        loss = tf.reduce_mean(
+            tf.square(ys - Qs_of_action),
+            name='loss',
+        )
+
+        opitimizer = tf.train.RMSPropOptimizer(
             learning_rate=self._config['learning_rate'],
             decay=self._config['rms_prop_decay'],
             momentum=self._config['gradient_momentum'],
             epsilon=self._config['min_squared_gradient'],
             centered=True,
-        ).minimize(self._loss_op)
-        self._tf_summary['loss'] = tf.summary.scalar('loss', self._loss_op)
+        )
+        optimizer.minimize(
+            loss=loss,
+            name='minimize_loss',    
+        )
 
-    def _build_validation_op(self):
-        Q_input = self._get_tf_op('Q_network/input')
-        self._validation_op_input = {
-            'validation_states': Q_input
-        }
-        Q_output = self._get_tf_op('Q_network/output')
-        self._average_Q_op = tf.reduce_mean(
+    def _build_validation_ops(self):
+        Q_input = self._get_tf_t('Q_network/input:0')
+#        self._validation_op_input = {
+#            'validation_states': Q_input
+#        }
+        Q_output = self._get_tf_t('Q_network/output:0')
+        average_Q = tf.reduce_mean(
             tf.reduce_max(Q_output, axis=1)
+            name='average_Q',
         )
-        self._tf_summary['Q'] = tf.summary.scalar('Q', self._average_Q_op)
 
-        self._ave_reward = tf.Variable(
-            0.0,
+        rewards = tf.placeholder(
+           tf.float32,
+           name='rewards',
+        )
+        ave_reward = tf.reduce_mean(
+            rewards,
             name='ave_reward',
-        )
-
-        self._tf_summary['reward_per_episode'] = tf.summary.scalar(
-            'reward_per_episode',
-            self._ave_reward
         )
 
     def _build_update_ops(self):
@@ -282,6 +299,20 @@ class AtariDQNAgent:
                 self._target_Q_update_ops.append(
                     tf.assign(target_var, source_var, name=layer_var_name)
                 )
+
+    def _build_summary_ops(self):
+        tf.summary.scalar(
+            name='loss',
+            tensor=self._get_tf_t('train/loss:0'),
+        )
+        tf.summary.scalar(
+            name='Q',
+            tensor=self._get_tf_t('validation/average_Q:0'),
+        )
+        tf.summary.scalar(
+            name='reward',
+            tensor=self._get_tf_t('validation/ave_reward:0'),
+        )
 
     def _get_filter_and_bias(self, W_shape, b_shape):
         W = tf.get_variable(
@@ -305,10 +336,10 @@ class AtariDQNAgent:
         )
 
     def _get_tf_op(self, name):
-        return self._tf_graph.get_operation_by_name('name')
+        return self._tf_graph.get_operation_by_name(name)
 
-    def _get_tf_var(self, name):
-        return self._tf_graph.get_tensor_by_name('name')
+    def _get_tf_t(self, name):
+        return self._tf_graph.get_tensor_by_name(name)
 
     def get_num_of_actions(self):
         return self._env.action_space.n
@@ -373,6 +404,7 @@ class AtariDQNAgent:
                 rewards = []
 
             done = True
+            observation = None
             episode = 0
             rewards_per_episode = []
             losses = []
@@ -384,15 +416,16 @@ class AtariDQNAgent:
                     and episode < max_num_of_episodes)
             ):
                 if done:
-                    initial_observation = self._env.reset()
-                    state = self.preprocess_observation(initial_observation)
+#                    initial_observation = self._env.reset()
+                    observation = self._env.reset()
+#                    state = self.preprocess_observation(initial_observation)
                     done = False
                     phi.fill(0)
                     episode += 1
                     rewards_per_episode.append(0)
                     losses.append(0)
-                else:
-                    state = next_state
+
+                state = self.preprocess_observation(observation)
 
                 if train:
                     if step < rss:
@@ -410,7 +443,7 @@ class AtariDQNAgent:
                 observation, reward, done, _ = self._env.step(action)
                 step += 1
                 rewards_per_episode[-1] += reward
-                next_state = self.preprocess_observation(observation)
+#                next_state = self.preprocess_observation(observation)
 
                 if train:
                     self._replay_memory.store(state, action, reward, int(done))
@@ -437,22 +470,36 @@ class AtariDQNAgent:
 
                     if (step % 1000 == 0):
                         ave_loss = np.mean(loss)
-                        Q_input = self._get_tf_op('Q_network/input')
-                        ave_Q, Q_summary_str = self._tf_session.run(
-                            [self._average_Q_op, self._tf_summary['Q']],
-                            feed_dict={
-                                Q_input: self._validation_states
-                            },
-                        )
-                        summary_writer.add_summary(Q_summary_str, step)
 
-                        ave_reward = np.mean(rewards_per_episode)
-
-                        _, reward_summary_str = self._tf_session.run(
-                            [tf.assign(self._ave_reward, ave_reward),
-                             self._tf_summary['reward_per_episode']]
+                        # Get ave. reward per episode and its summary string.
+                        fetches = [
+                            self._get_tf_t('validation/ave_reward:0'),
+                            self._get_tf_t('summary/reward:0'),
+                        ]
+                        feed_dict = {
+                            self._get_tf_t('validation/rewards:0'):
+                                rewards_per_episode,
+                        }
+                        ave_reward, reward_summary_str = self._tf_session.run(
+                            fetches=fetches,
+                            feed_dict=feed_dict,
                         )
                         summary_writer.add_summary(reward_summary_str, step)
+
+                        # Get ave. Q over validation states.
+                        fetches = [
+                            self._get_tf_t('validation/average_Q:0'),
+                            self._get_tf__t('summary/average_Q:0'),
+                        ]
+                        feed_dict = {
+                            self._get_tf_t('Q_network/input:0'):
+                                self._validation_states,
+                        }
+                        ave_Q, Q_summary_str = self._tf_session.run(
+                            fetches=fetches
+                            feed_dict=feed_dict,
+                        )
+                        summary_writer.add_summary(Q_summary_str, step)
 
                         print(
                             'step: {}, ave. loss: {:g}, '
@@ -518,8 +565,8 @@ class AtariDQNAgent:
         name = 'Q_network'
         if from_target_Q:
             name = 'target_' + name
-        Q_input = self._get_tf_op(name + '/input')
-        Q_output = self._get_tf_op(name + '/output')
+        Q_input = self._get_tf_t(name + '/input:0')
+        Q_output = self._get_tf_t(name + '/output:0')
         return self._tf_session.run(
             Q_output,
             feed_dict={Q_input: states},
@@ -540,13 +587,19 @@ class AtariDQNAgent:
             )
         )
 
+        fetches = [
+            self._get_tf_op('train/minimize_loss'),
+            self._get_tf_t('train/loss:0'),
+            self._get_tf_t('summary/loss:0'),
+        ]
+        feed_dict = {
+            self._get_tf_t('Q_network/input:0'): minibatch['states'],
+            self._get_tf_t('train/actions'): minibatch['actions'],
+            self._get_tf_t('train/ys'): ys,
+        }
         _, loss, loss_summary_str = self._tf_session.run(
-            [self._train_op, self._loss_op, self._tf_summary['loss']],
-            feed_dict={
-               self._train_op_input['states']: minibatch['states'],
-               self._train_op_input['actions']: minibatch['actions'],
-               self._train_op_input['ys']: ys,
-            }
+            fetches=fetches,
+            feed_dict=feed_dict,
         )
 
         return (loss, loss_summary_str)
