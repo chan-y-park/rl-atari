@@ -253,7 +253,7 @@ class AtariDQNAgent:
             name='loss',
         )
 
-        opitimizer = tf.train.RMSPropOptimizer(
+        optimizer = tf.train.RMSPropOptimizer(
             learning_rate=self._config['learning_rate'],
             decay=self._config['rms_prop_decay'],
             momentum=self._config['gradient_momentum'],
@@ -266,13 +266,13 @@ class AtariDQNAgent:
         )
 
     def _build_validation_ops(self):
-        Q_input = self._get_tf_t('Q_network/input:0')
+#        Q_input = self._get_tf_t('Q_network/input:0')
 #        self._validation_op_input = {
 #            'validation_states': Q_input
 #        }
         Q_output = self._get_tf_t('Q_network/output:0')
         average_Q = tf.reduce_mean(
-            tf.reduce_max(Q_output, axis=1)
+            tf.reduce_max(Q_output, axis=1),
             name='average_Q',
         )
 
@@ -291,10 +291,10 @@ class AtariDQNAgent:
             for var_name in ['W', 'b']:
                 layer_var_name = layer_name + '/' + var_name
                 source_var = self._tf_graph.get_tensor_by_name(
-                    'Q_networks/' + layer_var_name + ':0'
+                    'Q_network/' + layer_var_name + ':0'
                 )
                 target_var = self._tf_graph.get_tensor_by_name(
-                    'target_Q_networks/' + layer_var_name + ':0'
+                    'target_Q_network/' + layer_var_name + ':0'
                 )
                 self._target_Q_update_ops.append(
                     tf.assign(target_var, source_var, name=layer_var_name)
@@ -496,7 +496,7 @@ class AtariDQNAgent:
                                 self._validation_states,
                         }
                         ave_Q, Q_summary_str = self._tf_session.run(
-                            fetches=fetches
+                            fetches=fetches,
                             feed_dict=feed_dict,
                         )
                         summary_writer.add_summary(Q_summary_str, step)
