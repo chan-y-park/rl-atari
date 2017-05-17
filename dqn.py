@@ -143,16 +143,21 @@ class AtariDQNAgent:
         with self._tf_graph.as_default():
             with tf.variable_scope('Q_network'):
                 self._build_Q_network()
-            if self._config['target_network_update_frequency'] is not None:
+            tnuf = self._config['target_network_update_frequency']
+            if tnuf  is not None:
+                print(
+                    'Use a target Q network with update frequency {}.'
+                    .format(tnuf)
+                )
                 with tf.variable_scope('target_Q_network'):
                     self._build_Q_network()
+                with tf.variable_scope('update'):
+                    self._build_update_ops()
 
             with tf.variable_scope('train'):
                 self._build_train_ops()
             with tf.variable_scope('validation'):
                 self._build_validation_ops()
-            with tf.variable_scope('update'):
-                self._build_update_ops()
             with tf.variable_scope('summary'):
                 self._build_summary_ops()
 
@@ -205,20 +210,19 @@ class AtariDQNAgent:
                             tf.matmul(conv_out_flattened, W), b
                         )
                     )
-
+                elif 'output' in layer_name:
+                    in_dim = prev_layer.shape.as_list()[-1]
+                    num_actions = self.get_num_of_actions()
+                    W, b = self._get_filter_and_bias(
+                        W_shape=(in_dim, num_actions),
+                        b_shape=(num_actions),
+                    )
+                    new_layer = tf.nn.bias_add(
+                        tf.matmul(prev_layer, W), b,
+                        name='Qs',
+                    )
 
                 prev_layer = new_layer
-
-        in_dim = prev_layer.shape.as_list()[-1]
-        num_actions = self.get_num_of_actions()
-        W, b = self._get_filter_and_bias(
-            W_shape=(in_dim, num_actions),
-            b_shape=(num_actions),
-        )
-        new_layer = tf.nn.bias_add(
-            tf.matmul(prev_layer, W), b,
-            name='output',
-        )
 
     def _build_train_ops(self):
         ys = tf.placeholder(
@@ -239,7 +243,7 @@ class AtariDQNAgent:
 #            'ys': ys,
 #        }
 
-        Q_output = self._get_tf_t('Q_network/output:0')
+        Q_output = self._get_tf_t('Q_network/output/Qs:0')
         one_hot_actions = tf.one_hot(
             actions,
             self.get_num_of_actions(),
@@ -270,7 +274,7 @@ class AtariDQNAgent:
 #        self._validation_op_input = {
 #            'validation_states': Q_input
 #        }
-        Q_output = self._get_tf_t('Q_network/output:0')
+        Q_output = self._get_tf_t('Q_network/output/Qs:0')
         average_Q = tf.reduce_mean(
             tf.reduce_max(Q_output, axis=1),
             name='average_Q',
@@ -465,9 +469,6 @@ class AtariDQNAgent:
                     summary_writer.add_summary(loss_summary_str, step)
                     losses[-1] += loss
 
-                    if (step % tnuf == 0):
-                        self._update_target_Q_network()
-
                     if (step % 1000 == 0):
                         ave_loss = np.mean(loss)
 
@@ -489,7 +490,7 @@ class AtariDQNAgent:
                         # Get ave. Q over validation states.
                         fetches = [
                             self._get_tf_t('validation/average_Q:0'),
-                            self._get_tf__t('summary/average_Q:0'),
+                            self._get_tf_t('summary/Q:0'),
                         ]
                         feed_dict = {
                             self._get_tf_t('Q_network/input:0'):
@@ -514,6 +515,9 @@ class AtariDQNAgent:
                         stats['average_loss'].append(ave_loss)
                         stats['average_reward'].append(ave_reward)
                         stats['average_Q'].append(ave_Q)
+
+                    if (tnuf is not None and step % tnuf == 0):
+                        self._update_target_Q_network()
 
                     if (step % 10000 == 0 or step == max_num_of_steps):
                         save_path = saver.save(
@@ -566,7 +570,7 @@ class AtariDQNAgent:
         if from_target_Q:
             name = 'target_' + name
         Q_input = self._get_tf_t(name + '/input:0')
-        Q_output = self._get_tf_t(name + '/output:0')
+        Q_output = self._get_tf_t(name + '/output/Qs:0')
         return self._tf_session.run(
             Q_output,
             feed_dict={Q_input: states},
@@ -576,9 +580,13 @@ class AtariDQNAgent:
         gamma = self._config['discount_factor']
         minibatch = self._replay_memory.sample_minibatch()
         mask = (1 - minibatch['terminals'])
+        if self._config['target_network_update_frequency'] is None:
+            from_target_Q = False
+        else:
+            from_target_Q = True
         Qs_next = self._get_Q_values(
             minibatch['next_states'],
-            from_target_Q=True,
+            from_target_Q=from_target_Q,
         )
         ys = minibatch['rewards'] + gamma * (
             np.amax(
@@ -594,8 +602,8 @@ class AtariDQNAgent:
         ]
         feed_dict = {
             self._get_tf_t('Q_network/input:0'): minibatch['states'],
-            self._get_tf_t('train/actions'): minibatch['actions'],
-            self._get_tf_t('train/ys'): ys,
+            self._get_tf_t('train/actions:0'): minibatch['actions'],
+            self._get_tf_t('train/ys:0'): ys,
         }
         _, loss, loss_summary_str = self._tf_session.run(
             fetches=fetches,
@@ -609,3 +617,28 @@ class AtariDQNAgent:
 
     def _get_step_from_checkpoint(self, save_path):
         return int(save_path.split('-')[-1])
+
+#XXX DEBUG
+
+    def _check_update(self):
+        for layer_name, layer_conf in self._config['Q_network']:
+            for var_name in ['W', 'b']:
+                layer_var_name = layer_name + '/' + var_name
+                source_var = self._tf_graph.get_tensor_by_name(
+                    'Q_network/' + layer_var_name + ':0'
+                )
+                target_var = self._tf_graph.get_tensor_by_name(
+                    'target_Q_network/' + layer_var_name + ':0'
+                )
+                v, t_v = self._tf_session.run(
+                    [source_var, target_var],
+                )
+                print('{}: {}'.format(layer_var_name, np.unique(v == t_v)))
+
+
+        states = self._replay_memory._minibatch['states']
+        Qs = self._get_Q_values(states, from_target_Q=False)
+        t_Qs = self._get_Q_values(states, from_target_Q=True)
+        print('Qs == t_Qs: {}'.format(np.unique(Qs == t_Qs)))
+        import pdb
+        pdb.set_trace()
