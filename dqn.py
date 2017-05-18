@@ -94,6 +94,8 @@ class AtariDQNAgent:
         game_name='Breakout-v0',
         random_seed=None,
         config=dqn_nature_configuration,
+        gpu_memory_fraction=None,
+        gpu_memory_allow_growth=True,
     ):
         self.game_name = game_name
 
@@ -149,7 +151,13 @@ class AtariDQNAgent:
             with tf.variable_scope('summary'):
                 self._build_summary_ops()
             
-            self._tf_session = tf.Session()
+            tf_config = tf.ConfigProto()
+            tf_config.gpu_options.allow_growth = gpu_memory_allow_growth 
+            if gpu_memory_fraction is not None:
+                tf_config.gpu_options.per_process_gpu_memory_fraction = (
+                    gpu_memory_fraction
+                )
+            self._tf_session = tf.Session(config=tf_config)
             self._tf_session.run(tf.global_variables_initializer())
 
     def _build_Q_network(self):
@@ -505,6 +513,10 @@ class AtariDQNAgent:
 
                         gpu_memory_in_use_summary_str = self._tf_session.run(
                             self._get_tf_t('summary/stat/gpu_memory_in_use:0')
+                        )
+                        summary_writer.add_summary(
+                            gpu_memory_in_use_summary_str,
+                            step,
                         )
 
                         print(
