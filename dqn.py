@@ -148,7 +148,7 @@ class AtariDQNAgent:
                 self._build_validation_ops()
             with tf.variable_scope('summary'):
                 self._build_summary_ops()
-
+            
             self._tf_session = tf.Session()
             self._tf_session.run(tf.global_variables_initializer())
 
@@ -231,6 +231,7 @@ class AtariDQNAgent:
         Qs_of_action = tf.reduce_sum(
             tf.multiply(Q_output, one_hot_actions),
             axis=1,
+            name='Qs_of_action',
         )
 
         diffs = ys - Qs_of_action
@@ -290,18 +291,25 @@ class AtariDQNAgent:
                 )
 
     def _build_summary_ops(self):
-        tf.summary.scalar(
-            name='loss',
-            tensor=self._get_tf_t('train/loss:0'),
-        )
-        tf.summary.scalar(
-            name='Q',
-            tensor=self._get_tf_t('validation/average_Q:0'),
-        )
-        tf.summary.scalar(
-            name='reward',
-            tensor=self._get_tf_t('validation/ave_reward:0'),
-        )
+        with tf.variable_scope('stat'):
+            tf.summary.scalar(
+                name='gpu_memory_in_use',
+                tensor=tf.contrib.memory_stats.MaxBytesInUse()
+            )
+        with tf.variable_scope('train'):
+            tf.summary.scalar(
+                name='loss',
+                tensor=self._get_tf_t('train/loss:0'),
+            )
+        with tf.variable_scope('validation'):
+            tf.summary.scalar(
+                name='Q',
+                tensor=self._get_tf_t('validation/average_Q:0'),
+            )
+            tf.summary.scalar(
+                name='reward',
+                tensor=self._get_tf_t('validation/ave_reward:0'),
+            )
 
     def _get_filter_and_bias(self, W_shape, b_shape):
         W = tf.get_variable(
@@ -468,7 +476,7 @@ class AtariDQNAgent:
                         # Get ave. reward per episode and its summary string.
                         fetches = [
                             self._get_tf_t('validation/ave_reward:0'),
-                            self._get_tf_t('summary/reward:0'),
+                            self._get_tf_t('summary/validation/reward:0'),
                         ]
                         feed_dict = {
                             self._get_tf_t('validation/rewards:0'):
@@ -483,7 +491,7 @@ class AtariDQNAgent:
                         # Get ave. Q over validation states.
                         fetches = [
                             self._get_tf_t('validation/average_Q:0'),
-                            self._get_tf_t('summary/Q:0'),
+                            self._get_tf_t('summary/validation/Q:0'),
                         ]
                         feed_dict = {
                             self._get_tf_t('Q_network/input:0'):
@@ -494,6 +502,10 @@ class AtariDQNAgent:
                             feed_dict=feed_dict,
                         )
                         summary_writer.add_summary(Q_summary_str, step)
+
+                        gpu_memory_in_use_summary_str = self._tf_session.run(
+                            self._get_tf_t('summary/stat/gpu_memory_in_use:0')
+                        )
 
                         print(
                             'step: {}, ave. loss: {:g}, '
@@ -591,7 +603,7 @@ class AtariDQNAgent:
         fetches = [
             self._get_tf_op('train/minimize_loss'),
             self._get_tf_t('train/loss:0'),
-            self._get_tf_t('summary/loss:0'),
+            self._get_tf_t('summary/train/loss:0'),
         ]
         feed_dict = {
             self._get_tf_t('Q_network/input:0'): minibatch['states'],
