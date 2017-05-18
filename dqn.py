@@ -233,18 +233,18 @@ class AtariDQNAgent:
             axis=1,
         )
 
+        diffs = ys - Qs_of_action
         if self._config['clip_error']:
+            print('Use error clipping...')
             deltas = tf.minimum(
-                tf.square(ys - Qs_of_action),
-                tf.abs(ys - Qs_of_action),
+                tf.square(diffs),
+                tf.abs(diffs),
+                name='clipped_deltas',
             )
         else:
-            deltas = tf.square(ys - Qs_of_action)
+            deltas = tf.square(diffs, name='deltas')
 
-        loss = tf.reduce_mean(
-            deltas,
-            name='loss',
-        )
+        loss = tf.reduce_mean(deltas, name='loss')
 
         optimizer = tf.train.RMSPropOptimizer(
             learning_rate=self._config['learning_rate'],
@@ -544,7 +544,7 @@ class AtariDQNAgent:
                 )
                 return (actions, rewards)
 
-    def _get_action(self, epsilon):
+    def _get_action(self, epsilon, phi):
         if (self._np_random.rand() < epsilon):
             action = self._env.action_space.sample()
         else:
