@@ -26,10 +26,11 @@ dqn_configuration = {
     'final_exploration': 0.1,
     'final_exploration_frame': 10 ** 6,
     'replay_start_size': 5 * (10 ** 4),
-    'no-op_max': 30,
+    'no_op_max': 30,
     'validation_size': 500,
     'evaluation_exploration': 0.05,
     'target_network_update_frequency': None,
+    'clip_error': False,
 }
 
 dqn_nips_configuration = deepcopy(dqn_configuration)
@@ -43,3 +44,4 @@ dqn_nature_configuration['Q_network'] = [
     ('fc1', {'num_relus': 512}),
     ('output', {}),
 ]
+dqn_nature_configuration['clip_error'] = True

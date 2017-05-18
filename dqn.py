@@ -10,6 +10,7 @@ from PIL import Image
 
 from configs import dqn_nature_configuration
 
+ACTION_NO_OP = 0
 
 class ReplayMemory:
     def __init__(self, config, np_random):
@@ -121,19 +122,6 @@ class AtariDQNAgent:
         )
 
         self._target_Q_update_ops = None
-#
-#        self._train_op_input = {}
-#        self._validation_op_input = {}
-#        self._loss_op = None
-#        self._average_Q_op = None
-#        self._ave_reward = None
-
-#        # A dict of TF ops to run. A key is the name of an op.
-#        self._tf_op = {}
-        # A dict of TF tensors to use.
-        # A key is the name of a tensor without the output index
-        # unless necessary.
-        self._tf_t = {}
 
         self._validation_states = None
         self._tf_summary = {}
@@ -182,7 +170,6 @@ class AtariDQNAgent:
                     W_s = layer_conf['filter_size']
                     s = layer_conf['stride']
                     _, _, _, i = prev_layer.shape.as_list()
-#                    i = layer_conf['in']
                     o = layer_conf['num_filters']
                     W, b = self._get_filter_and_bias(
                         W_shape=(W_s, W_s, i, o),
@@ -235,13 +222,6 @@ class AtariDQNAgent:
             shape=(self._config['minibatch_size']),
             name='actions',
         )
-#        Q_input = self._get_tf_t('Q_network/input:0')
-
-#        self._train_op_input = {
-#            'states': Q_input,
-#            'actions': actions,
-#            'ys': ys,
-#        }
 
         Q_output = self._get_tf_t('Q_network/output/Qs:0')
         one_hot_actions = tf.one_hot(
@@ -252,8 +232,17 @@ class AtariDQNAgent:
             tf.multiply(Q_output, one_hot_actions),
             axis=1,
         )
+
+        if self._config['clip_error']:
+            deltas = tf.minimum(
+                tf.square(ys - Qs_of_action),
+                tf.abs(ys - Qs_of_action),
+            )
+        else:
+            deltas = tf.square(ys - Qs_of_action)
+
         loss = tf.reduce_mean(
-            tf.square(ys - Qs_of_action),
+            deltas,
             name='loss',
         )
 
@@ -270,10 +259,6 @@ class AtariDQNAgent:
         )
 
     def _build_validation_ops(self):
-#        Q_input = self._get_tf_t('Q_network/input:0')
-#        self._validation_op_input = {
-#            'validation_states': Q_input
-#        }
         Q_output = self._get_tf_t('Q_network/output/Qs:0')
         average_Q = tf.reduce_mean(
             tf.reduce_max(Q_output, axis=1),
@@ -413,6 +398,7 @@ class AtariDQNAgent:
             rewards_per_episode = []
             losses = []
             phi = np.empty((1, s, s, c), dtype=np.float32)
+            num_no_ops = None
 
             while (
                 step < max_num_of_steps
@@ -420,10 +406,9 @@ class AtariDQNAgent:
                     and episode < max_num_of_episodes)
             ):
                 if done:
-#                    initial_observation = self._env.reset()
-                    observation = self._env.reset()
-#                    state = self.preprocess_observation(initial_observation)
                     done = False
+                    observation = self._env.reset()
+                    num_no_ops = 0
                     phi.fill(0)
                     episode += 1
                     rewards_per_episode.append(0)
@@ -443,11 +428,19 @@ class AtariDQNAgent:
 
                 phi[0,:,:,:3] = phi[0,:,:,1:]
                 phi[0,:,:,3] = np.array(state, dtype=np.float32)
+
                 action = self._get_action(epsilon, phi)
+                if action == ACTION_NO_OP and num_no_ops is not None:
+                    num_no_ops += 1
+                    if num_no_ops == self._config['no_op_max']:
+                        while action != ACTION_NO_OP:        
+                            action = self._env.action_space.sample()
+                else:
+                    num_no_ops = None
+
                 observation, reward, done, _ = self._env.step(action)
                 step += 1
                 rewards_per_episode[-1] += reward
-#                next_state = self.preprocess_observation(observation)
 
                 if train:
                     self._replay_memory.store(state, action, reward, int(done))
@@ -535,7 +528,6 @@ class AtariDQNAgent:
                     rewards.append(reward)
                     play_images.append(Image.fromarray(observation))
 
-
             if train:
                 if (step >= max_num_of_steps):
                     print(
@@ -552,11 +544,12 @@ class AtariDQNAgent:
                 )
                 return (actions, rewards)
 
-    def _get_action(self, epsilon, phi):
+    def _get_action(self, epsilon):
         if (self._np_random.rand() < epsilon):
-            return self._env.action_space.sample()
+            action = self._env.action_space.sample()
         else:
-            return self._get_action_from_Q(phi)
+            action = self._get_action_from_Q(phi)
+        return action
 
     def _get_action_from_Q(self, phi):
         Qs = self._get_Q_values(phi)
