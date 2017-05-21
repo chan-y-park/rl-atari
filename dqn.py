@@ -1,5 +1,7 @@
 import os
 import time
+import subprocess
+import json
 
 import numpy as np
 
@@ -11,6 +13,13 @@ from PIL import Image
 from configs import dqn_nature_configuration
 
 ACTION_NO_OP = 0
+
+NVIDIA_SMI_ARGS = [
+    'nvidia-smi',
+    '--query-compute-apps=pid,used_memory',
+#    '--format=csv,noheader,nounits',
+    '--format=csv,noheader',
+]
 
 class ReplayMemory:
     def __init__(self, config, np_random):
@@ -92,6 +101,9 @@ class AtariDQNAgent:
     def __init__(
         self,
         game_name='Breakout-v0',
+        log_dir='logs',
+        checkpoint_dir='checkpoints',
+        run_dir='runs',
         random_seed=None,
         config=dqn_nature_configuration,
         gpu_memory_fraction=None,
@@ -99,13 +111,14 @@ class AtariDQNAgent:
     ):
         self.game_name = game_name
 
-        log_dir = './log'
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
-        checkpoints_dir = './checkpoints'
-        if not os.path.exists(checkpoints_dir):
-            os.makedirs(checkpoints_dir)
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir)
+        if not os.path.exists(run_dir):
+            os.makedirs(run_dir)
 
+        self._pid = os.getpid()
         self._config = config
         self._env = gym.make(game_name)
 
@@ -146,8 +159,13 @@ class AtariDQNAgent:
 
             with tf.variable_scope('train'):
                 self._build_train_ops()
+
             with tf.variable_scope('validation'):
                 self._build_validation_ops()
+
+            with tf.variable_scope('stat'):
+                tf.Variable(0.0, name='used_gpu_memory')
+
             with tf.variable_scope('summary'):
                 self._build_summary_ops()
             
@@ -301,8 +319,9 @@ class AtariDQNAgent:
     def _build_summary_ops(self):
         with tf.variable_scope('stat'):
             tf.summary.scalar(
-                name='gpu_memory_in_use',
-                tensor=tf.contrib.memory_stats.MaxBytesInUse()
+                name='used_gpu_memory',
+#                tensor=tf.contrib.memory_stats.MaxBytesInUse(),
+                tensor=self._get_tf_t('stat/used_gpu_memory:0')
             )
         with tf.variable_scope('train'):
             tf.summary.scalar(
@@ -371,7 +390,9 @@ class AtariDQNAgent:
         train=True,
         save_path=None,
         step=None,
-        log_name=None,
+#        log_name=None,
+        run_name=None,
+        var_list=None,
     ):
 
         s = self._config['Q_network_input_size']
@@ -387,7 +408,7 @@ class AtariDQNAgent:
         }
 
         with self._tf_graph.as_default():
-            saver = tf.train.Saver()
+            saver = tf.train.Saver(var_list=var_list)
             if save_path is not None:
                 saver.restore(self._tf_session, save_path)
                 step = self._get_step_from_checkpoint(save_path)
@@ -396,13 +417,15 @@ class AtariDQNAgent:
                 step = 0
 
             if train:
-                if log_name is None:
-                    log_name = ('{:02}{:02}{:02}{:02}{:02}'
+                if run_name is None:
+                    run_name = ('{:02}{:02}_{:02}{:02}{:02}'
                                 .format(*time.localtime()[1:6]))
                 summary_writer = tf.summary.FileWriter(
-                    logdir='log/{}'.format(log_name),
+                    logdir='logs/{}'.format(run_name),
                     graph=self._tf_graph
                 )
+                with open('runs/{}'.format(run_name), 'w') as fp:
+                    json.dump(self._config, fp)
             else:
                 play_images = []
                 actions = []
@@ -419,7 +442,7 @@ class AtariDQNAgent:
             while (
                 step < max_num_of_steps
                 or (max_num_of_episodes is not None
-                    and episode < max_num_of_episodes)
+                    and episode <= max_num_of_episodes)
             ):
                 if done:
                     done = False
@@ -461,92 +484,103 @@ class AtariDQNAgent:
                 if train:
                     self._replay_memory.store(state, action, reward, int(done))
 
-                    if (self._replay_memory.get_size() < rss):
-                        continue
-                    elif (self._validation_states is None):
-                        vs = self._config['validation_size']
-                        self._validation_states = np.zeros(
-                            (vs, s, s, c), dtype=np.float32,
-                        )
-                        samples = self._replay_memory.get_samples(vs)
-                        self._replay_memory.fill_states(
-                            samples,
-                            self._validation_states,
-                        )
-
-                    loss, loss_summary_str = self._optimize_Q()
-                    summary_writer.add_summary(loss_summary_str, step)
-                    losses[-1] += loss
-
                     if (step % 1000 == 0):
-                        ave_loss = np.mean(loss)
-
-                        # Get ave. reward per episode and its summary string.
-                        fetches = [
-                            self._get_tf_t('validation/ave_reward:0'),
-                            self._get_tf_t('summary/validation/reward:0'),
-                        ]
-                        feed_dict = {
-                            self._get_tf_t('validation/rewards:0'):
-                                rewards_per_episode,
-                        }
-                        ave_reward, reward_summary_str = self._tf_session.run(
-                            fetches=fetches,
-                            feed_dict=feed_dict,
+                        try:
+                            used_gpu_memory = self._get_used_gpu_memory()
+                        except:
+                            used_gpu_memory = 0.0
+                        tf_assign_op = tf.assign(
+                            self._get_tf_t('stat/used_gpu_memory:0'),
+                            used_gpu_memory,
                         )
-                        summary_writer.add_summary(reward_summary_str, step)
-
-                        # Get ave. Q over validation states.
-                        fetches = [
-                            self._get_tf_t('validation/average_Q:0'),
-                            self._get_tf_t('summary/validation/Q:0'),
-                        ]
-                        feed_dict = {
-                            self._get_tf_t('Q_network/input:0'):
-                                self._validation_states,
-                        }
-                        ave_Q, Q_summary_str = self._tf_session.run(
-                            fetches=fetches,
-                            feed_dict=feed_dict,
-                        )
-                        summary_writer.add_summary(Q_summary_str, step)
-
-                        gpu_memory_in_use_summary_str = self._tf_session.run(
-                            self._get_tf_t('summary/stat/gpu_memory_in_use:0')
+                        _, used_gpu_memory_summary = self._tf_session.run(
+                            [tf_assign_op,
+                             self._get_tf_t('summary/stat/used_gpu_memory:0')]
                         )
                         summary_writer.add_summary(
-                            gpu_memory_in_use_summary_str,
+                            used_gpu_memory_summary,
                             step,
                         )
 
-                        print(
-                            'step: {}, ave. loss: {:g}, '
-                            'ave. reward: {:g}, ave. Q: {:g}'
-                            .format(
-                                step,
-                                ave_loss,
-                                ave_reward,
-                                ave_Q,
+                    if (self._replay_memory.get_size() >= rss):
+
+                        if (self._validation_states is None):
+                            vs = self._config['validation_size']
+                            self._validation_states = np.zeros(
+                                (vs, s, s, c), dtype=np.float32,
                             )
-                        )
-                        stats['average_loss'].append(ave_loss)
-                        stats['average_reward'].append(ave_reward)
-                        stats['average_Q'].append(ave_Q)
+                            samples = self._replay_memory.get_samples(vs)
+                            self._replay_memory.fill_states(
+                                samples,
+                                self._validation_states,
+                            )
 
-                    if (tnuf is not None and step % tnuf == 0):
-                        self._update_target_Q_network()
+                        loss, loss_summary = self._optimize_Q()
+                        summary_writer.add_summary(loss_summary, step)
+                        losses[-1] += loss
 
-                    if (step % 10000 == 0 or step == max_num_of_steps):
-                        save_path = saver.save(
-                            self._tf_session,
-                            'checkpoints/{}'.format(self.game_name),
-                            global_step=step,
-                        )
-                        print('checkpoint saved at {}'.format(save_path))
+                        if (step % 1000 == 0):
+                            ave_loss = np.mean(loss)
 
-                    if (step % 50000 == 0):
-                        rewards_per_episode = rewards_per_episode[-1:]
-                        losses = losses[-1:]
+                            # Get ave. reward per episode
+                            # and its summary string.
+                            fetches = [
+                                self._get_tf_t('validation/ave_reward:0'),
+                                self._get_tf_t('summary/validation/reward:0'),
+                            ]
+                            feed_dict = {
+                                self._get_tf_t('validation/rewards:0'):
+                                    rewards_per_episode,
+                            }
+                            ave_reward, reward_summary = self._tf_session.run(
+                                fetches=fetches,
+                                feed_dict=feed_dict,
+                            )
+                            summary_writer.add_summary(reward_summary, step)
+
+                            # Get ave. Q over validation states.
+                            fetches = [
+                                self._get_tf_t('validation/average_Q:0'),
+                                self._get_tf_t('summary/validation/Q:0'),
+                            ]
+                            feed_dict = {
+                                self._get_tf_t('Q_network/input:0'):
+                                    self._validation_states,
+                            }
+                            ave_Q, Q_summary = self._tf_session.run(
+                                fetches=fetches,
+                                feed_dict=feed_dict,
+                            )
+                            summary_writer.add_summary(Q_summary, step)
+
+                            print(
+                                'step: {}, ave. loss: {:g}, '
+                                'ave. reward: {:g}, ave. Q: {:g}'
+                                .format(
+                                    step,
+                                    ave_loss,
+                                    ave_reward,
+                                    ave_Q,
+                                )
+                            )
+                            stats['average_loss'].append(ave_loss)
+                            stats['average_reward'].append(ave_reward)
+                            stats['average_Q'].append(ave_Q)
+
+                        if (tnuf is not None and step % tnuf == 0):
+                            self._update_target_Q_network()
+
+                        if (step % 10000 == 0 or step == max_num_of_steps):
+                            save_path = saver.save(
+                                self._tf_session,
+                                'checkpoints/{}'.format(run_name),
+                                global_step=step,
+                            )
+                            print('checkpoint saved at {}'.format(save_path))
+
+                        if (step % 50000 == 0):
+                            rewards_per_episode = rewards_per_episode[-1:]
+                            losses = losses[-1:]
                 else:
                     actions.append(action)
                     rewards.append(reward)
@@ -562,9 +596,10 @@ class AtariDQNAgent:
                 return stats
             else:
                 play_images[0].save(
-                    'play.gif',
+                    'play_{}.gif'.format(self.game_name),
                     save_all=True,
                     append_images=play_images[1:],
+                    duration=30,
                 )
                 return (actions, rewards)
 
@@ -622,18 +657,51 @@ class AtariDQNAgent:
             self._get_tf_t('train/actions:0'): minibatch['actions'],
             self._get_tf_t('train/ys:0'): ys,
         }
-        _, loss, loss_summary_str = self._tf_session.run(
+        _, loss, loss_summary = self._tf_session.run(
             fetches=fetches,
             feed_dict=feed_dict,
         )
 
-        return (loss, loss_summary_str)
+        return (loss, loss_summary)
 
     def _update_target_Q_network(self):
         self._tf_session.run(self._target_Q_update_ops)
 
     def _get_step_from_checkpoint(self, save_path):
         return int(save_path.split('-')[-1])
+
+    def _get_used_gpu_memory(self):
+        # TODO subprocess too slow, use nvmlDeviceGetComputeRunningProcesses.
+        smi_outputs = subprocess.check_output(
+            NVIDIA_SMI_ARGS,
+            universal_newlines=True,
+        ).splitlines()
+
+        used_gpu_memory = 0.0
+
+        for output in smi_outputs:
+            pid_str, used_gpu_memory_str = output.split(', ')
+            if(int(pid_str) == self._pid):
+                val_str, unit_str = used_gpu_memory_str.split(' ')
+                if unit_str == 'MiB':
+                    used_gpu_memory = float(val_str)
+                else:
+                    raise RuntimeError(
+                        'Unknown memory unit: {}'.format()
+                    )
+
+        return used_gpu_memory
+
+    def _get_weight_dict(self):
+        weight_dict = {}
+        for layer_name, layer_conf in self._config['Q_network']:
+            for var_name in ['W', 'b']:
+                layer_var_name = layer_name + '/' + var_name
+                key = 'Q_network/{}'.format(layer_var_name)
+                weight_dict[key] = self._get_tf_t(key + ':0')
+                key = 'target_' + key
+                weight_dict[key] = self._get_tf_t(key + ':0')
+        return weight_dict
 
 #XXX DEBUG
 
