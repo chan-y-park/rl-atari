@@ -352,7 +352,6 @@ class AtariDQNAgent:
         return (W, b)
 
     def _get_variable_initializer(self):
-        # TODO: Check the original initialization
         return tf.truncated_normal_initializer(
             mean=self._config['var_init_mean'],
             stddev=self._config['var_init_stddev'],
@@ -390,7 +389,6 @@ class AtariDQNAgent:
         train=True,
         save_path=None,
         step=None,
-#        log_name=None,
         run_name=None,
         var_list=None,
     ):
@@ -702,28 +700,3 @@ class AtariDQNAgent:
                 key = 'target_' + key
                 weight_dict[key] = self._get_tf_t(key + ':0')
         return weight_dict
-
-#XXX DEBUG
-
-    def _check_update(self):
-        for layer_name, layer_conf in self._config['Q_network']:
-            for var_name in ['W', 'b']:
-                layer_var_name = layer_name + '/' + var_name
-                source_var = self._tf_graph.get_tensor_by_name(
-                    'Q_network/' + layer_var_name + ':0'
-                )
-                target_var = self._tf_graph.get_tensor_by_name(
-                    'target_Q_network/' + layer_var_name + ':0'
-                )
-                v, t_v = self._tf_session.run(
-                    [source_var, target_var],
-                )
-                print('{}: {}'.format(layer_var_name, np.unique(v == t_v)))
-
-
-        states = self._replay_memory._minibatch['states']
-        Qs = self._get_Q_values(states, from_target_Q=False)
-        t_Qs = self._get_Q_values(states, from_target_Q=True)
-        print('Qs == t_Qs: {}'.format(np.unique(Qs == t_Qs)))
-        import pdb
-        pdb.set_trace()

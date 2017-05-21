@@ -2,8 +2,6 @@ from copy import deepcopy
 
 dqn_configuration = {
     'Q_network': [
-#        ('conv1', {'W_size': 8, 'stride': 4, 'in': 4, 'out': 16}),
-#        ('conv2', {'W_size': 4, 'stride': 2, 'in': 16, 'out': 32}),
         ('conv1', {'filter_size': 8, 'stride': 4, 'num_filters': 16}),
         ('conv2', {'filter_size': 4, 'stride': 2, 'num_filters': 32}),
         ('fc1', {'num_relus': 256}),
