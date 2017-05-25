@@ -11,6 +11,7 @@ import tensorflow as tf
 from PIL import Image
 
 from configs import dqn_nature_configuration
+from replay_memory import ReplayMemory
 
 ACTION_NO_OP = 0
 
@@ -20,81 +21,6 @@ NVIDIA_SMI_ARGS = [
 #    '--format=csv,noheader,nounits',
     '--format=csv,noheader',
 ]
-
-class ReplayMemory:
-    def __init__(self, config, np_random):
-        self.size = config['replay_memory_size']
-        self.minibatch_size = m = config['minibatch_size']
-        self.agent_history_length = h = config['agent_history_length']
-        self.Q_network_input_size = s = config['Q_network_input_size']
-
-        self.index = 0
-        self.full = False
-        self.states = np.zeros((self.size, s, s), dtype=np.uint8)
-        self.actions = np.zeros((self.size), dtype=np.uint8)
-        self.rewards = np.zeros((self.size), dtype=np.float32)
-        self.terminals = np.zeros((self.size), dtype=np.uint8)
-        self._np_random = np_random
-        self._minibatch = {
-            'states': np.zeros((m, s, s, h), dtype=np.float32),
-            'actions': np.zeros(m, dtype=np.uint8),
-            'rewards': np.zeros(m, dtype=np.float32),
-            'next_states': np.zeros((m, s, s, h), dtype=np.float32),
-            'terminals': np.zeros(m, dtype=np.uint8),
-        }
-
-    def store(self, state, action, reward, terminal):
-        self.states[self.index] = state
-        self.actions[self.index] = action
-        self.rewards[self.index] = reward
-        self.terminals[self.index] = terminal
-        self.index += 1
-        if self.index == self.size:
-            self.full = True
-            self.index = 0
-
-    def get_size(self):
-        if self.full:
-            current_size = self.size
-        else:
-            current_size = self.index
-        return current_size
-
-    def get_samples(self, sample_size):
-        current_size = self.get_size()
-        if current_size < sample_size:
-            raise RuntimeError(
-                'Number of states {} less than minibatch size {}'
-                .format(current_size, sample_size)
-            )
-        samples = self._np_random.randint(
-            low=(self.agent_history_length - 1),
-            # XXX The following cannot sample self.states[self.size]
-            # even when the next state is available as self.states[0].
-            high=(current_size - 1),
-            size=sample_size,
-        )
-        return samples
-
-    def sample_minibatch(self):
-        samples = self.get_samples(self.minibatch_size)
-
-        self.fill_states(samples, self._minibatch['states'])
-        self.fill_states(samples, self._minibatch['next_states'], offset=1)
-        self._minibatch['actions'] = self.actions[samples]
-        self._minibatch['rewards'] = self.rewards[samples]
-        self._minibatch['terminals'] = self.terminals[samples]
-
-        return self._minibatch
-
-    def fill_states(self, samples, buf_states, offset=0):
-        h = self.agent_history_length
-        for i in range(len(samples)):
-            j = samples[i]
-            buf_states[i] = np.transpose(
-                self.states[(j - h + 1 + offset):(j + 1 + offset),:,:],
-                (1, 2, 0),
-            )
 
 
 class AtariDQNAgent:
@@ -177,6 +103,28 @@ class AtariDQNAgent:
                 )
             self._tf_session = tf.Session(config=tf_config)
             self._tf_session.run(tf.global_variables_initializer())
+
+    def get_used_gpu_memory(self):
+        # TODO subprocess too slow, use nvmlDeviceGetComputeRunningProcesses.
+        smi_outputs = subprocess.check_output(
+            NVIDIA_SMI_ARGS,
+            universal_newlines=True,
+        ).splitlines()
+
+        used_gpu_memory = 0.0
+
+        for output in smi_outputs:
+            pid_str, used_gpu_memory_str = output.split(', ')
+            if(int(pid_str) == self._pid):
+                val_str, unit_str = used_gpu_memory_str.split(' ')
+                if unit_str == 'MiB':
+                    used_gpu_memory = float(val_str)
+                else:
+                    raise RuntimeError(
+                        'Unknown memory unit: {}'.format()
+                    )
+
+        return used_gpu_memory
 
     def _build_Q_network(self):
         s = self._config['Q_network_input_size']
@@ -382,13 +330,46 @@ class AtariDQNAgent:
         obs = obs[-new_width:, :]
         return obs
 
+    def train(
+        self,
+        max_num_of_steps=None,
+        save_path=None,
+        run_name=None,
+        var_list=None,
+    ):
+        if var_list is None:
+            var_list = self._get_weight_dict()
+
+        return self.run(
+            max_num_of_steps=max_num_of_steps,
+            train=True,
+            save_path=save_path,
+            run_name=run_name,
+            var_list=var_list,
+        )
+
     def play(
         self,
-        max_num_of_steps=(10**6),
+        max_num_of_episodes=None,
+        save_path=None,
+        var_list=None,
+    ):
+        if var_list is None:
+            var_list = self._get_weight_dict()
+
+        return self.run(
+            max_num_of_episodes=max_num_of_episodes,
+            train=False,
+            save_path=save_path,
+            var_list=var_list,
+        )
+
+    def run(
+        self,
+        max_num_of_steps=None,
         max_num_of_episodes=None,
         train=True,
         save_path=None,
-        step=None,
         run_name=None,
         var_list=None,
     ):
@@ -404,15 +385,13 @@ class AtariDQNAgent:
             'average_reward': [],
             'average_Q': [],
         }
+        step = 0
 
         with self._tf_graph.as_default():
             saver = tf.train.Saver(var_list=var_list)
             if save_path is not None:
                 saver.restore(self._tf_session, save_path)
                 step = self._get_step_from_checkpoint(save_path)
-
-            if step is None:
-                step = 0
 
             if train:
                 if run_name is None:
@@ -438,9 +417,10 @@ class AtariDQNAgent:
             num_no_ops = None
 
             while (
-                step < max_num_of_steps
-                or (max_num_of_episodes is not None
-                    and episode <= max_num_of_episodes)
+                (max_num_of_steps is not None and step < max_num_of_steps)
+                or
+                (max_num_of_episodes is not None
+                 and episode <= max_num_of_episodes)
             ):
                 if done:
                     done = False
@@ -484,7 +464,7 @@ class AtariDQNAgent:
 
                     if (step % 1000 == 0):
                         try:
-                            used_gpu_memory = self._get_used_gpu_memory()
+                            used_gpu_memory = self.get_used_gpu_memory()
                         except:
                             used_gpu_memory = 0.0
                         tf_assign_op = tf.assign(
@@ -667,28 +647,6 @@ class AtariDQNAgent:
 
     def _get_step_from_checkpoint(self, save_path):
         return int(save_path.split('-')[-1])
-
-    def _get_used_gpu_memory(self):
-        # TODO subprocess too slow, use nvmlDeviceGetComputeRunningProcesses.
-        smi_outputs = subprocess.check_output(
-            NVIDIA_SMI_ARGS,
-            universal_newlines=True,
-        ).splitlines()
-
-        used_gpu_memory = 0.0
-
-        for output in smi_outputs:
-            pid_str, used_gpu_memory_str = output.split(', ')
-            if(int(pid_str) == self._pid):
-                val_str, unit_str = used_gpu_memory_str.split(' ')
-                if unit_str == 'MiB':
-                    used_gpu_memory = float(val_str)
-                else:
-                    raise RuntimeError(
-                        'Unknown memory unit: {}'.format()
-                    )
-
-        return used_gpu_memory
 
     def _get_weight_dict(self):
         weight_dict = {}
